@@ -1,0 +1,845 @@
+if getgenv().VoxelArmorLoaded then warn("Armor engine already running") return end
+getgenv().VoxelArmorLoaded = true
+
+local Players = game:GetService("Players")
+local RS      = game:GetService("ReplicatedStorage")
+local TS      = game:GetService("TweenService")
+local Run     = game:GetService("RunService")
+local lp      = Players.LocalPlayer
+
+local stamp = RS:WaitForChild("Remotes"):WaitForChild("StampAsset")
+local AUTH  = "{36e9d98d-9757-4da1-ba5d-b9bbeb0097ba}"
+
+-- ============================================================================
+-- BLOCK IDS
+-- ============================================================================
+
+local ID = {
+    Slate     = 41324945,
+    Red       = 56452821,
+    Blue      = 56452539,
+    Green     = 56452651,
+    Yellow    = 56452718,
+    Gray      = 56453012,
+    Black     = 56453053,
+    White     = 56452868,
+    Magenta   = 56452342,
+    Pink      = 56452293,
+    Orange    = 56452768,
+    Cyan      = 56452470,
+    Purple    = 56452411,
+    Ice       = 56451715,
+    DarkGreen = 41324912,
+}
+
+local SKINS = {
+    "blocky :3","Noobish","Slasher","tuff","bighead",
+    "Female","Female 2","Cyber","Ghost","Gold","Void"
+}
+
+-- ============================================================================
+-- STATE
+-- ============================================================================
+
+local STATE = {
+    skin       = "blocky :3",
+    targetName = "",
+    equipped   = false,
+    auraOn     = false,
+    poolReady  = false,
+    stamping   = false,
+    offsets    = {},
+    -- Clone Stand Feature
+    cloneStandOn = false,
+    smallSkin1   = "Noobish",
+    smallSkin2   = "Cyber",
+    -- FIXED BASE APPEARANCE VALUES
+    cloneSepX    = 8,     
+    cloneSepY    = -3.2, -- Locked directly relative to Torso anchor plane      
+    cloneSepZ    = 0,      
+    cloneScale   = 0,      
+    -- Aura (hardcoded settings)
+    auraRadius  = 20,
+    auraSpeed   = 3.5,
+    auraHeight  = 6,
+    auraBlocks  = 50,
+    auraYOffset = -10,
+    auraMode    = "orbit",
+    -- Pool Base Counts
+    armorMax   = 54,
+    totalPool  = 54,
+}
+
+-- ============================================================================
+-- SKIN COLOR MAP
+-- ============================================================================
+
+local function getSkinID(skin, limb)
+    local isArm  = limb:find("Arm")
+    local isLeg  = limb:find("Leg")
+    local isHead = limb == "Head"
+    local isTors = limb == "Torso"
+
+    if skin == "blocky :3" then
+        return isTors and ID.Gray or ID.Slate
+    elseif skin == "Noobish" then
+        if isTors then return ID.Blue
+        elseif isLeg then return ID.Green
+        else return ID.Yellow end
+    elseif skin == "Slasher" then
+        return isTors and ID.Slate or ID.Red
+    elseif skin == "tuff" then
+        return isTors and ID.Yellow or ID.Black
+    elseif skin == "bighead" then
+        if isHead then return ID.Black
+        elseif isTors then return ID.Gray
+        else return ID.Slate end
+    elseif skin == "Female" then
+        return isTors and ID.White or ID.Gray
+    elseif skin == "Female 2" then
+        return isTors and ID.Magenta or ID.Pink
+    elseif skin == "Cyber" then
+        if isTors then return ID.Black
+        elseif isArm then return ID.Cyan
+        elseif isLeg then return ID.Purple
+        else return ID.Black end
+    elseif skin == "Ghost" then
+        return isTors and ID.Black or ID.Ice
+    elseif skin == "Gold" then
+        return isLeg and ID.Orange or ID.Yellow
+    elseif skin == "Void" then
+        return isHead and ID.Purple or ID.Black
+    end
+    return ID.Slate
+end
+
+-- ============================================================================
+-- ARMOR OFFSETS BUILDER
+-- ============================================================================
+
+local function buildOffsets()
+    local offsets = {}
+    
+    local isFemale = STATE.skin == "Female" or STATE.skin == "Female 2"
+    local isBig    = STATE.skin == "bighead"
+
+    local function addMain(limb, x, y, z)
+        table.insert(offsets, {limb = limb, offset = CFrame.new(x, y, z), type = "main", skinName = STATE.skin, cloneSide = 0})
+    end
+
+    -- HEAD (Main)
+    if isBig then
+        for _, p in ipairs({
+            {0,0,1.2},{-0.8,0,1.2},{0.8,0,1.2},
+            {0,0.8,1.2},{-0.8,0.8,1.2},{0.8,0.8,1.2},
+            {0,-0.8,1.2},{-0.8,-0.8,1.2},{0.8,-0.8,1.2},
+            {0,1.4,0},{-0.8,1.0,0},{0.8,1.0,0},
+            {0,0,-1.2},{0,-1.0,0},
+        }) do addMain("Head",p[1],p[2],p[3]) end
+    else
+        addMain("Head", 0, isFemale and 0.55 or 1.0, 0)
+        addMain("Head", 0, 0.2, isFemale and 0.5 or 0.9)
+        addMain("Head", 0, 0.4, isFemale and -0.5 or -0.9)
+        addMain("Head", isFemale and -0.5 or -0.9, 0.3, 0)
+        addMain("Head", isFemale and 0.5 or 0.9, 0.3, 0)
+        addMain("Head", 0, -0.4, isFemale and 0.55 or 1.0)
+    end
+
+    -- TORSO (Main - 16)
+    local fw = isFemale and 1.2 or 1.4
+    addMain("Torso", 0,    0.6,  isFemale and 0.95 or 0.8)
+    addMain("Torso", 0,   -0.6,  isFemale and 0.65 or 0.8)
+    addMain("Torso",-0.8,  0,    0.8)
+    addMain("Torso", 0.8,  0,    0.8)
+    addMain("Torso", 0,    0.6, -0.8)
+    addMain("Torso", 0,   -0.6, -0.8)
+    addMain("Torso",-0.8,  0,   -0.8)
+    addMain("Torso", 0.8,  0,   -0.8)
+    addMain("Torso",-fw,   0.8,  0)
+    addMain("Torso",-fw,   0,    0)
+    addMain("Torso",-fw,  -0.8,  0)
+    addMain("Torso", fw,   0.8,  0)
+    addMain("Torso", fw,   0,    0)
+    addMain("Torso", fw,  -0.8,  0)
+    addMain("Torso",-0.5,  1.2,  0)
+    addMain("Torso", 0.5,  1.2,  0)
+
+    -- ARMS (Main - 16)
+    for _, arm in ipairs({"Left Arm","Right Arm"}) do
+        local s  = arm=="Left Arm" and -1 or 1
+        local aw = isFemale and 0.35 or 0.6
+        addMain(arm, s*aw,                         0.8,  0)
+        addMain(arm, s*(isFemale and 0.4 or 0.8),  0.4,  0)
+        addMain(arm, 0,  0,  isFemale and  0.4 or  0.7)
+        addMain(arm, 0,  0,  isFemale and -0.4 or -0.7)
+        addMain(arm, s*(isFemale and 0.4 or 0.7), -0.4,  0)
+        addMain(arm, 0, -0.8, isFemale and  0.4 or  0.7)
+        addMain(arm, 0, -0.8, isFemale and -0.4 or -0.7)
+        addMain(arm, s*(isFemale and 0.4 or 0.7), -1.2,  0)
+    end
+
+    -- LEGS (Main - 16)
+    for _, leg in ipairs({"Left Leg","Right Leg"}) do
+        local s  = leg=="Left Leg" and -1 or 1
+        local tw = isFemale and 0.85 or 0.7
+        addMain(leg, 0,     0.8,   0.7)
+        addMain(leg, 0,     0.8,  -0.7)
+        addMain(leg, s*tw,  0.4,   0)
+        addMain(leg, 0,     0,     0.7)
+        addMain(leg, 0,    -0.6,   0.7)
+        addMain(leg, 0,    -0.6,  -0.7)
+        addMain(leg, s*0.7,-1.0,   0)
+        addMain(leg, 0,    -1.2,   0.9)
+    end
+
+    -- 2. Clone Armor Arrays (24 blocks per small variant)
+    if STATE.cloneStandOn then
+        local function buildSmallLayout(offsetsArray, skinName, sideSign)
+            local function addSmall(limb, x, y, z)
+                table.insert(offsetsArray, {
+                    limb = limb, 
+                    offset = CFrame.new(x, y, z), 
+                    type = "clone", 
+                    skinName = skinName,
+                    cloneSide = sideSign
+                })
+            end
+            -- Head (2)
+            addSmall("Head", 0, 1.0, 0)
+            addSmall("Head", 0, 0.2, 0.8)
+            -- Torso (6)
+            addSmall("Torso", 0, 0.5, 0.7)
+            addSmall("Torso", 0, -0.5, 0.7)
+            addSmall("Torso", 0, 0.5, -0.7)
+            addSmall("Torso", -1.1, 0, 0)
+            addSmall("Torso", 1.1, 0, 0)
+            addSmall("Torso", 0, 1.1, 0)
+            -- Arms (4 each / 8 total)
+            for _, arm in ipairs({"Left Arm", "Right Arm"}) do
+                local s = arm == "Left Arm" and -1 or 1
+                addSmall(arm, s*0.6, 0.4, 0)
+                addSmall(arm, 0, 0, 0.6)
+                addSmall(arm, 0, -0.6, 0.6)
+                addSmall(arm, s*0.6, -1.0, 0)
+            end
+            -- Legs (4 each / 8 total)
+            for _, leg in ipairs({"Left Leg", "Right Leg"}) do
+                local s = leg == "Left Leg" and -1 or 1
+                addSmall(leg, 0, 0.6, 0.6)
+                addSmall(leg, s*0.6, 0, 0)
+                addSmall(leg, 0, -0.6, 0.6)
+                addSmall(leg, 0, -1.1, 0.7)
+            end
+        end
+
+        buildSmallLayout(offsets, STATE.smallSkin1, -1)
+        buildSmallLayout(offsets, STATE.smallSkin2, 1)
+    end
+
+    return offsets
+end
+
+-- ============================================================================
+-- HELPERS
+-- ============================================================================
+
+local function getPlatePart()
+    local pl = workspace:FindFirstChild("Plates")
+    if not pl then return nil, nil end
+    for _, f in ipairs(pl:GetChildren()) do
+        local o = f:FindFirstChild("Owner")
+        if o and (tostring(o.Value)==lp.Name or tostring(o.Value)==tostring(lp.UserId)) then
+            return f:FindFirstChild("Plate"), f
+        end
+    end
+    return nil, nil
+end
+
+local function getPoolParts(folder)
+    if not folder then return {} end
+    local ap = folder:FindFirstChild("ActiveParts")
+    if not ap then return {} end
+    local parts = {}
+    for _, v in ipairs(ap:GetDescendants()) do
+        if v:IsA("BasePart") and v.Name ~= "Plate" then
+            table.insert(parts, v)
+        end
+    end
+    return parts
+end
+
+local function findTarget()
+    local t = STATE.targetName:gsub("%s+","")
+    if t == "" then return lp end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower():sub(1,#t)==t:lower() or p.DisplayName:lower():sub(1,#t)==t:lower() then
+            return p
+        end
+    end
+    return nil
+end
+
+-- ============================================================================
+-- STAMP POOL
+-- ============================================================================
+
+local function updatePoolSize()
+    local baseArmorSize = 54
+    if STATE.cloneStandOn then
+        baseArmorSize = baseArmorSize + 24 + 24
+    end
+    STATE.armorMax  = baseArmorSize
+    STATE.totalPool = STATE.armorMax + (STATE.auraOn and STATE.auraBlocks or 0)
+end
+
+local function stampPool(statusCb)
+    if STATE.stamping then return end
+    STATE.stamping  = true
+    STATE.poolReady = false
+    
+    if STATE.cloneStandOn then
+        local pool = {}
+        for _, s in ipairs(SKINS) do if s ~= STATE.skin then table.insert(pool, s) end end
+        if #pool > 0 then
+            STATE.smallSkin1 = pool[math.random(1, #pool)]
+            if #pool > 1 then
+                for i, v in ipairs(pool) do if v == STATE.smallSkin1 then table.remove(pool, i) break end end
+            end
+            STATE.smallSkin2 = pool[math.random(1, #pool)]
+        else
+            STATE.smallSkin1 = STATE.skin
+            STATE.smallSkin2 = STATE.skin
+        end
+    end
+    
+    updatePoolSize()
+
+    local total    = STATE.totalPool
+    local auraAmt  = STATE.auraOn and STATE.auraBlocks or 0
+
+    if statusCb then statusCb(
+        "forging "..total.."blk ("..STATE.armorMax.." armor + "..auraAmt.." aura)…",
+        Color3.fromRGB(220,130,40)
+    ) end
+
+    task.spawn(function()
+        local platePart, folder = getPlatePart()
+        if not platePart then
+            if statusCb then statusCb("error: stand on your plate", Color3.fromRGB(200,60,70)) end
+            STATE.stamping = false
+            return
+        end
+
+        STATE.offsets = buildOffsets()
+
+        local cols = 10
+        for i = 1, total do
+            local row = math.floor((i-1)/cols)
+            local col = (i-1) % cols
+            local cf  = platePart.CFrame * CFrame.new((col*5)-22, 5, (row*5)-28)
+
+            local blockID
+            if i <= STATE.armorMax then
+                local data = STATE.offsets[i]
+                local limb = data and data.limb or "Torso"
+                local activeSkin = data and data.skinName or STATE.skin
+                blockID = getSkinID(activeSkin, limb)
+            else
+                blockID = (i%2==0) and ID.Black or ID.Gray
+            end
+
+            pcall(function()
+                stamp:InvokeServer(blockID, cf, AUTH, {}, 0)
+            end)
+            task.wait(0.012)
+        end
+
+        STATE.stamping  = false
+        STATE.poolReady = true
+        if statusCb then statusCb(
+            STATE.skin.." · "..total.."blk · aura:"..(STATE.auraOn and STATE.auraMode or "off"),
+            Color3.fromRGB(60,200,100)
+        ) end
+    end)
+end
+
+-- ============================================================================
+-- AURA POSITION
+-- ============================================================================
+
+local function getAuraPos(torsoPos, i, t)
+    local anchorPos = torsoPos + Vector3.new(0, STATE.auraYOffset, 0)
+    local total     = STATE.auraBlocks
+    local radius    = STATE.auraRadius
+    local speed     = STATE.auraSpeed
+    local hAmp      = STATE.auraHeight
+    local mode      = STATE.auraMode
+    local ringDir   = (i%2==0) and 1 or -1
+    local baseAngle = (i / total) * (math.pi * 2)
+
+    if mode == "orbit" then
+        local angle = baseAngle + t * speed * ringDir
+        return anchorPos + Vector3.new(
+            math.cos(angle) * radius,
+            math.sin(t*2 + i*0.4) * hAmp * 0.15,
+            math.sin(angle) * radius
+        )
+    elseif mode == "helix" then
+        local angle  = baseAngle + t * speed
+        local yPhase = math.sin(t*1.5 + i*0.3) * hAmp
+        return anchorPos + Vector3.new(
+            math.cos(angle) * radius,
+            yPhase,
+            math.sin(angle) * radius
+        )
+    elseif mode == "pulse" then
+        local pulse = (math.sin(t*2.5) + 1) / 2
+        local r     = radius * (0.4 + pulse * 1.2)
+        local angle = baseAngle + t * speed * 0.8 * ringDir
+        return anchorPos + Vector3.new(
+            math.cos(angle) * r,
+            math.sin(t*3 + i) * hAmp * 0.25,
+            math.sin(angle) * r
+        )
+    elseif mode == "vortex" then
+        local angle = baseAngle + t * speed * ringDir * 1.5
+        local yOff  = -hAmp * 0.5 + (i/total) * hAmp
+        local r     = radius * (0.3 + (i/total) * 1.4)
+        return anchorPos + Vector3.new(
+            math.cos(angle) * r,
+            yOff,
+            math.sin(angle) * r
+        )
+    elseif mode == "expand" then
+        local beat  = (math.sin(t*3 + i*0.5) + 1) / 2
+        local r     = radius * (0.2 + beat * 2.0)
+        local angle = baseAngle + t * speed * 0.5 * ringDir
+        return anchorPos + Vector3.new(
+            math.cos(angle) * r,
+            math.sin(t*2 + i) * hAmp * 0.2,
+            math.sin(angle) * r
+        )
+    end
+    return anchorPos
+end
+
+-- ============================================================================
+-- HEARTBEAT
+-- ============================================================================
+
+Run.Heartbeat:Connect(function()
+    if not STATE.equipped or not STATE.poolReady or STATE.stamping then return end
+
+    local target = findTarget()
+    local char   = target and target.Character
+    if not char then return end
+
+    local _, folder = getPlatePart()
+    if not folder then return end
+
+    local parts = getPoolParts(folder)
+    if #parts == 0 then return end
+
+    local offsets   = STATE.offsets
+    local t         = tick()
+    local platePart = folder:FindFirstChild("Plate")
+    local torso     = char:FindFirstChild("Torso")
+    local torsoPos  = torso and torso.Position or Vector3.zero
+
+    for i = 1, STATE.totalPool do
+        local part = parts[i]
+        if not part then break end
+
+        part.Anchored   = false
+        part.CanCollide = false
+
+        if i <= STATE.armorMax then
+            local data = offsets[i]
+            if data then
+                if data.type == "clone" then
+                    -- ── DANCE ENGINE LOGIC FOR CLONES ──
+                    local speed = 5.5
+                    local wave  = t * speed + (data.cloneSide * 1.2)
+                    
+                    -- Compute active procedural animation waves
+                    local bounceY = math.abs(math.sin(wave)) * 0.9
+                    local swayX   = math.cos(wave) * 0.4
+                    local tiltZ   = math.sin(wave) * 0.15
+                    
+                    -- Calculate the clean ground position relative to Torso root matrix (independent of custom limbs)
+                    local xShift = data.cloneSide * STATE.cloneSepX
+                    local baseCenterOffset = Vector3.new(xShift + swayX, STATE.cloneSepY + bounceY, STATE.cloneSepZ)
+                    local cloneCenterWorld = torso.CFrame * baseCenterOffset
+                    
+                    -- Individual limb rotation animations to mimic local dancing
+                    local localLimbCF = data.offset
+                    if data.limb == "Left Arm" or data.limb == "Right Arm" then
+                        local multiplier = (data.limb == "Left Arm") and -1 or 1
+                        localLimbCF = localLimbCF * CFrame.new(0, math.sin(wave * 1.5) * 0.2, 0) * CFrame.Angles(math.sin(wave) * 0.6 * multiplier, 0, 0)
+                    elseif data.limb == "Left Leg" or data.limb == "Right Leg" then
+                        local multiplier = (data.limb == "Left Leg") and -1 or 1
+                        localLimbCF = localLimbCF * CFrame.new(0, 0, math.cos(wave * 1.5) * 0.15) * CFrame.Angles(math.cos(wave) * 0.4 * multiplier, 0, 0)
+                    elseif data.limb == "Head" then
+                        localLimbCF = localLimbCF * CFrame.Angles(0, math.sin(wave) * 0.25, math.cos(wave) * 0.1)
+                    end
+                    
+                    -- Ground the position using a uniform base transformation matrix
+                    part.CFrame = CFrame.new(cloneCenterWorld.Position) 
+                                * CFrame.Angles(0, torso.CFrame.Rotation:ToEulerAnglesYXZ(), tiltZ) 
+                                * localLimbCF
+                                
+                    part.AssemblyLinearVelocity  = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                else
+                    -- Main armor maps tracking variables precisely to character limbs
+                    local limb = char:FindFirstChild(data.limb)
+                    if limb and limb:IsA("BasePart") then
+                        part.CFrame = limb.CFrame * data.offset
+                    end
+                    part.AssemblyLinearVelocity  = Vector3.zero
+                    part.AssemblyAngularVelocity = Vector3.zero
+                end
+            end
+        else
+            -- AURA
+            if STATE.auraOn and torso then
+                local auraIdx   = i - STATE.armorMax
+                local targetPos = getAuraPos(torsoPos, auraIdx, t)
+                local dir       = targetPos - part.Position
+                local dist      = dir.Magnitude
+
+                part.CFrame = CFrame.new(targetPos)
+
+                local rd = (auraIdx%2==0) and 1 or -1
+                part.AssemblyAngularVelocity = Vector3.new(0, rd*8, 0)
+
+                if dist > 0.1 then
+                    part.AssemblyLinearVelocity = dir.Unit * math.clamp(dist*40, 50, 220)
+                else
+                    part.AssemblyLinearVelocity = Vector3.zero
+                end
+            else
+                if platePart then
+                    part.CFrame = platePart.CFrame * CFrame.new(((i-STATE.armorMax)%10)*4-20, -200, 0)
+                end
+                part.AssemblyLinearVelocity  = Vector3.zero
+                part.AssemblyAngularVelocity = Vector3.zero
+            end
+        end
+    end
+end)
+
+-- ============================================================================
+-- UI SETUP
+-- ============================================================================
+
+local C = {
+    bg    = Color3.fromRGB(12,12,16),
+    panel = Color3.fromRGB(18,18,24),
+    card  = Color3.fromRGB(24,24,32),
+    border= Color3.fromRGB(38,38,52),
+    acc   = Color3.fromRGB(220,130,40),
+    grn   = Color3.fromRGB(60,200,100),
+    red   = Color3.fromRGB(200,60,70),
+    txt   = Color3.fromRGB(215,215,225),
+    sub   = Color3.fromRGB(95,95,120),
+    dim   = Color3.fromRGB(60,60,80),
+    purp  = Color3.fromRGB(140,80,220),
+}
+
+-- Compacted structural layout values
+local W=210 local MH=40 local minned=false
+
+local gui=Instance.new("ScreenGui")
+gui.Name="VoxelArmor" gui.ResetOnSpawn=false
+pcall(function() gui.Parent=game:GetService("CoreGui") end)
+if not gui.Parent then gui.Parent=lp:WaitForChild("PlayerGui") end
+
+local win=Instance.new("Frame",gui)
+win.Size=UDim2.new(0,W,0,MH)
+win.Position=UDim2.new(0.4,0,0.1,0)
+win.BackgroundColor3=C.bg win.BorderSizePixel=0
+win.Active=true win.Draggable=true win.ClipsDescendants=true
+win.Rotation=0
+Instance.new("UICorner",win).CornerRadius=UDim.new(0,8)
+Instance.new("UIStroke",win).Color=C.border
+
+local hdr=Instance.new("Frame",win)
+hdr.Size=UDim2.new(1,0,0,MH)
+hdr.BackgroundColor3=C.panel hdr.BorderSizePixel=0
+Instance.new("UICorner",hdr).CornerRadius=UDim.new(0,8)
+
+local hdrFix=Instance.new("Frame",hdr)
+hdrFix.Size=UDim2.new(1,0,0.5,0) hdrFix.Position=UDim2.new(0,0,0.5,0)
+hdrFix.BackgroundColor3=C.panel hdrFix.BorderSizePixel=0
+
+local dot=Instance.new("Frame",hdr)
+dot.Size=UDim2.new(0,5,0,5) dot.Position=UDim2.new(0,8,0.5,-2)
+dot.BackgroundColor3=C.acc dot.BorderSizePixel=0
+Instance.new("UICorner",dot).CornerRadius=UDim.new(1,0)
+
+local ava=Instance.new("ImageLabel",hdr)
+ava.Size=UDim2.new(0,20,0,20) ava.Position=UDim2.new(0,18,0.5,-10)
+ava.BackgroundColor3=C.card ava.BorderSizePixel=0
+ava.Image="https://www.roblox.com/headshot-thumbnail/image?userId="..lp.UserId.."&width=48&height=48&format=png"
+Instance.new("UICorner",ava).CornerRadius=UDim.new(1,0)
+
+local hT=Instance.new("TextLabel",hdr)
+hT.Size=UDim2.new(1,-85,0,MH) hT.Position=UDim2.new(0,44,0,0)
+hT.BackgroundTransparency=1 hT.Text="voxel armor"
+hT.TextColor3=C.txt hT.Font=Enum.Font.Gotham hT.TextSize=10
+hT.TextXAlignment=Enum.TextXAlignment.Left
+
+local minB=Instance.new("TextButton",hdr)
+minB.Size=UDim2.new(0,22,0,22) minB.Position=UDim2.new(1,-50,0.5,-11)
+minB.BackgroundColor3=C.card minB.Text="—" minB.TextColor3=C.sub
+minB.Font=Enum.Font.Gotham minB.TextSize=10 minB.AutoButtonColor=false
+Instance.new("UICorner",minB).CornerRadius=UDim.new(0,5)
+
+local closeB=Instance.new("TextButton",hdr)
+closeB.Size=UDim2.new(0,22,0,22) closeB.Position=UDim2.new(1,-24,0.5,-11)
+closeB.BackgroundColor3=C.card closeB.Text="×" closeB.TextColor3=C.sub
+closeB.Font=Enum.Font.Gotham closeB.TextSize=12 closeB.AutoButtonColor=false
+Instance.new("UICorner",closeB).CornerRadius=UDim.new(0,5)
+
+local scroll=Instance.new("ScrollingFrame",win)
+scroll.Size=UDim2.new(1,0,1,-MH) scroll.Position=UDim2.new(0,0,0,MH)
+scroll.BackgroundTransparency=1 scroll.BorderSizePixel=0
+scroll.ScrollBarThickness=2 scroll.ScrollBarImageColor3=C.border
+scroll.CanvasSize=UDim2.new(0,0,0,0)
+scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
+scroll.Visible=false
+
+local sp=Instance.new("UIPadding",scroll)
+sp.PaddingLeft=UDim.new(0,6) sp.PaddingRight=UDim.new(0,6)
+sp.PaddingTop=UDim.new(0,5) sp.PaddingBottom=UDim.new(0,6)
+
+local sl=Instance.new("UIListLayout",scroll)
+sl.Padding=UDim.new(0,4) sl.SortOrder=Enum.SortOrder.LayoutOrder
+
+local ord=0
+local function nxt() ord=ord+1 return ord end
+
+local statusBox=Instance.new("Frame",scroll)
+statusBox.Size=UDim2.new(1,0,0,20) statusBox.LayoutOrder=nxt()
+statusBox.BackgroundColor3=C.panel statusBox.BorderSizePixel=0
+Instance.new("UICorner",statusBox).CornerRadius=UDim.new(0,4)
+
+local statusLbl=Instance.new("TextLabel",statusBox)
+statusLbl.Size=UDim2.new(1,-10,1,0) statusLbl.Position=UDim2.new(0,6,0,0)
+statusLbl.BackgroundTransparency=1 statusLbl.Text="ready · forge to begin"
+statusLbl.TextColor3=C.sub statusLbl.Font=Enum.Font.Gotham
+statusLbl.TextSize=9 statusLbl.TextXAlignment=Enum.TextXAlignment.Left
+statusLbl.TextWrapped=true
+
+local function setStatus(msg, color)
+    statusLbl.Text       = msg
+    statusLbl.TextColor3 = color or C.sub
+end
+
+local function secLbl(t)
+    local l=Instance.new("TextLabel",scroll)
+    l.Size=UDim2.new(1,0,0,12) l.LayoutOrder=nxt()
+    l.BackgroundTransparency=1 l.Text=t
+    l.TextColor3=C.dim l.Font=Enum.Font.GothamBold l.TextSize=8
+    l.TextXAlignment=Enum.TextXAlignment.Left
+end
+
+local function inlineCard(h)
+    local c=Instance.new("Frame",scroll)
+    c.Size=UDim2.new(1,0,0,h or 28) c.LayoutOrder=nxt()
+    c.BackgroundColor3=C.card c.BorderSizePixel=0
+    Instance.new("UICorner",c).CornerRadius=UDim.new(0,6)
+    Instance.new("UIStroke",c).Color=C.border
+    return c
+end
+
+local function togRow(label, ac, getter, setter)
+    local c=inlineCard(28)
+    local lbl=Instance.new("TextLabel",c)
+    lbl.Size=UDim2.new(0.65,0,1,0) lbl.Position=UDim2.new(0,8,0,0)
+    lbl.BackgroundTransparency=1 lbl.Text=label
+    lbl.TextColor3=C.txt lbl.Font=Enum.Font.Gotham lbl.TextSize=9
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+
+    local p=Instance.new("TextButton",c)
+    p.Size=UDim2.new(0,42,0,18) p.Position=UDim2.new(1,-48,0.5,-9)
+    p.BackgroundColor3=C.panel p.BorderSizePixel=0
+    p.Text="off" p.TextColor3=C.sub p.Font=Enum.Font.Gotham
+    p.TextSize=9 p.AutoButtonColor=false
+    Instance.new("UICorner",p).CornerRadius=UDim.new(0,4)
+    Instance.new("UIStroke",p).Color=C.border
+
+    local function ref()
+        local on=getter()
+        TS:Create(p,TweenInfo.new(0.15),{
+            BackgroundColor3=on and ac or C.panel,
+            TextColor3=on and C.bg or C.sub
+        }):Play()
+        p.Text=on and "on" or "off"
+    end
+    p.MouseButton1Click:Connect(function() setter(not getter()) ref() end)
+    ref()
+    return ref
+end
+
+local function cycleRow(label, list, stateKey, onChanged)
+    local c=inlineCard(28)
+    local lbl=Instance.new("TextLabel",c)
+    lbl.Size=UDim2.new(0.5,0,1,0) lbl.Position=UDim2.new(0,8,0,0)
+    lbl.BackgroundTransparency=1 lbl.Text=label
+    lbl.TextColor3=C.txt lbl.Font=Enum.Font.Gotham lbl.TextSize=9
+    lbl.TextXAlignment=Enum.TextXAlignment.Left
+
+    local btn=Instance.new("TextButton",c)
+    btn.Size=UDim2.new(0,80,0,18) btn.Position=UDim2.new(1,-86,0.5,-9)
+    btn.BackgroundColor3=C.panel btn.BorderSizePixel=0
+    btn.Text=tostring(STATE[stateKey]) btn.TextColor3=C.acc
+    btn.Font=Enum.Font.GothamBold btn.TextSize=9 btn.AutoButtonColor=false
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,4)
+    Instance.new("UIStroke",btn).Color=C.border
+
+    btn.MouseButton1Click:Connect(function()
+        local idx=1
+        for i,v in ipairs(list) do
+            if tostring(v)==tostring(STATE[stateKey]) then idx=i break end
+        end
+        STATE[stateKey]=list[(idx%#list)+1]
+        btn.Text=tostring(STATE[stateKey])
+        if onChanged then onChanged() end
+    end)
+    return btn
+end
+
+local function inpRow(ph, fn)
+    local c=inlineCard(28)
+    local b=Instance.new("TextBox",c)
+    b.Size=UDim2.new(1,-12,0,20) b.Position=UDim2.new(0,8,0.5,-10)
+    b.BackgroundTransparency=1 b.PlaceholderText=ph
+    b.PlaceholderColor3=C.sub b.Text=""
+    b.TextColor3=C.txt b.Font=Enum.Font.Gotham b.TextSize=9
+    b.ClearTextOnFocus=false b.TextXAlignment=Enum.TextXAlignment.Left
+    if fn then
+        b:GetPropertyChangedSignal("Text"):Connect(function() fn(b.Text) end)
+    end
+    return b
+end
+
+local function actionBtn(text, color, fn)
+    local b=Instance.new("TextButton",scroll)
+    b.Size=UDim2.new(1,0,0,28) b.LayoutOrder=nxt()
+    b.BackgroundColor3=color b.Text=text
+    b.TextColor3=Color3.new(1,1,1) b.Font=Enum.Font.GothamBold
+    b.TextSize=9 b.AutoButtonColor=false b.BorderSizePixel=0
+    Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
+    b.MouseButton1Click:Connect(fn)
+    return b
+end
+
+-- ── BUILD UI COMPONENT ORDER ─────────────────────────────────────────────────
+
+-- Target
+secLbl("target")
+inpRow("username (blank = yourself)", function(t)
+    STATE.targetName = t
+    local found = findTarget()
+    if found then setStatus("→ "..found.Name, C.grn)
+    elseif t=="" then setStatus("targeting: yourself", C.sub)
+    else setStatus("no match found", C.red) end
+end)
+
+-- Skin
+secLbl("skin palette")
+cycleRow("skin", SKINS, "skin", function()
+    STATE.offsets = {}
+    setStatus("skin → "..STATE.skin.." · re-forge to apply", C.acc)
+end)
+
+-- Armor
+secLbl("armor options")
+togRow("equip armor plates", C.grn,
+    function() return STATE.equipped end,
+    function(v)
+        STATE.equipped = v
+        setStatus(v and "armor active" or "armor off", v and C.grn or C.sub)
+    end)
+
+togRow("clone stand (2 small suits)", C.acc,
+    function() return STATE.cloneStandOn end,
+    function(v)
+        STATE.cloneStandOn = v
+        STATE.offsets = {}
+        setStatus(v and "clones enabled · re-forge shell" or "clones disabled", C.acc)
+    end)
+
+-- Aura
+secLbl("aura")
+togRow("aura active", C.purp,
+    function() return STATE.auraOn end,
+    function(v)
+        STATE.auraOn = v
+        setStatus(v and ("aura on · "..STATE.auraMode.." · re-forge if needed") or "aura off", v and C.purp or C.sub)
+    end)
+
+cycleRow("mode", {"orbit","helix","pulse","vortex","expand"}, "auraMode", function()
+    setStatus("aura mode → "..STATE.auraMode, C.purp)
+end)
+
+-- Forge
+secLbl("forge")
+actionBtn("🔨  forge shell", C.acc, function()
+    stampPool(setStatus)
+end)
+
+-- ── WINDOW CONTROLS ──────────────────────────────────────────────────────────
+
+local function getFH()
+    return math.min(MH + sl.AbsoluteContentSize.Y + 15, 420)
+end
+
+local function openW()
+    scroll.Visible=true
+    task.wait(0.02)
+    TS:Create(win,TweenInfo.new(0.3,Enum.EasingStyle.Quint),{
+        Size=UDim2.new(0,W,0,getFH())
+    }):Play()
+end
+
+local function closeW()
+    TS:Create(win,TweenInfo.new(0.3,Enum.EasingStyle.Quint),{
+        Size=UDim2.new(0,W,0,MH)
+    }):Play()
+    task.delay(0.28,function() scroll.Visible=false end)
+end
+
+minB.MouseButton1Click:Connect(function()
+    minned=not minned
+    if minned then closeW() else openW() end
+    minB.Text=minned and "+" or "—"
+end)
+
+closeB.MouseButton1Click:Connect(function()
+    TS:Create(win,TweenInfo.new(0.2,Enum.EasingStyle.Quint),{
+        Size=UDim2.new(0,W,0,0)
+    }):Play()
+    task.delay(0.22,function()
+        gui:Destroy()
+        getgenv().VoxelArmorLoaded=nil
+    end)
+end)
+
+task.spawn(function()
+    while gui and gui.Parent do
+        TS:Create(dot,TweenInfo.new(1),{BackgroundTransparency=0.7}):Play()
+        task.wait(1)
+        TS:Create(dot,TweenInfo.new(1),{BackgroundTransparency=0}):Play()
+        task.wait(1)
+    end
+end)
+
+task.spawn(function()
+    task.wait(0.05)
+    openW()
+end)
+
+print("[VOXEL ARMOR] Configured with static ground dancing mini clones live!")
