@@ -1,0 +1,858 @@
+-- [[ Pika Test Body - Pokémon Edition ]]
+-- Features: Custom Pikachu Voxel Rig, Pikachu-Themed Anim Suite, Sleek Minimizable UI, Torso Tracking, Follow, Sit, Look At, Live Leg Controls, One-Leg Spin (Single-Play), Grab/Reach Mechanics (Player + Self Target), Subtle Chill Ground Shaking, Live Configurable Ground Shake Offsets
+
+if getgenv().AssetPlaygroundLoaded then 
+    warn("Asset Playground is already running!")
+    return 
+end
+getgenv().AssetPlaygroundLoaded = true
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local lp = Players.LocalPlayer
+local stampRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("StampAsset")
+local updateBaseColorRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("BaseCustomization"):WaitForChild("UpdateBaseColor")
+
+-- Theme Config (Pikachu Aesthetic)
+local C_MAIN    = Color3.fromRGB(18, 18, 22)
+local C_CARD    = Color3.fromRGB(30, 30, 36)
+local C_PIKA_Y  = Color3.fromRGB(255, 204, 0)  -- Pikachu Yellow
+local C_PIKA_R  = Color3.fromRGB(230, 50, 50)  -- Cheek Red
+local C_TEXT    = Color3.fromRGB(245, 245, 245)
+local C_MUTED   = Color3.fromRGB(140, 140, 150)
+
+local DummyParts = {
+    Head = {}, Torso = {}, LArm = {}, RArm = {}, LLeg = {}, RLeg = {},
+    LEar = {}, REar = {}, CheekL = {}, CheekR = {}, Tail = {}
+}
+
+local IDs = {Red = 56452821, Black = 56453053, Yellow = 56452718}
+local dummyActive, spawnPivot = false, nil
+local blockGap, jointGap = 4.0, 3.0
+
+-- Baked Rig Settings
+local BakedSettings = {
+    LArmX = 0.7, LArmY = 2.9, LArmZ = -0.1,
+    LArmRotX = -4.5, LArmRotY = -18.6, LArmRotZ = -15.3,
+    RArmX = 1, RArmY = 2.3, RArmZ = -1.7,
+    RArmRotX = -3.8, RArmRotY = 37.7, RArmRotZ = -9,
+    EyeSpread = -1.1, EyeX = -0.6, EyeY = 0.5, EyeZ = -3,
+    CheekX = 0.4, CheekY = 2, CheekZ = 0.2,
+    EarX = -0.4, EarY = -1.4, EarZ = 3,
+    BodyHeight = -2.2, LegHeight = 3.5,
+    TailSpread = 0.5, TailRotX = 33, TailRotY = 95, TailRotZ = -25
+}
+
+-- Configurable Ground Shake Animation Offsets
+local ShakeAnimSettings = {
+    TorsoTiltDeg = 55,
+    HeadPitchDeg = 1,
+    LArmX = -1, LArmY = 10, LArmZ = 3,
+    RArmX = 3, RArmY = 10, RArmZ = 3,
+    LLegX = -2, LLegY = 1, LLegZ = -1,
+    RLegX = 2, RLegY = 1, RLegZ = -3
+}
+
+-- States
+local isWaving    = false
+local isSitting   = false
+local lookAtSelf  = false
+local isFollowing = false
+
+-- New Anim States
+local isSpinning  = false
+local isGrabMode  = false
+local isShaking   = false
+
+local waveLerp    = 0
+local sitLerp     = 0
+local walkLerp    = 0
+local spinLerp    = 0
+local grabLerp    = 0
+local shakeLerp   = 0
+
+local spinAngle        = 0
+local currentSpinSpeed = 0
+
+local smoothedHeadRot  = CFrame.identity
+local smoothedTorsoRot = CFrame.identity
+
+local smoothedLookYaw = 0
+local lookLerp        = 0
+local walkAngle       = 0
+
+local lockedTarget      = nil
+local lockedTargetTimer = 0
+local LOCK_DURATION     = 4
+
+-- Updated Default Leg Offsets
+local legIdleX, legIdleY, legIdleZ = 0, 0, 1.8
+local legSpreadApart = 2.1
+
+-- Movement Config
+local FOLLOW_SPEED      = 16
+local STOP_DISTANCE     = 6.5
+local WALK_LEG_PITCH    = 0.95
+local WALK_LEG_LIFT     = 1.1
+local WALK_LEG_SPREAD   = 0.4
+local WALK_ARM_PITCH    = 1.1
+local WALK_ARM_SPEED    = 1.2
+local WALK_ARM_OFFSET_Z = 0.25
+local WALK_TORSO_SWAY   = 0.12
+local WALK_STEP_SPEED   = 3.2
+
+-- Expanded Grab / Hitbox Range
+local GRAB_HITBOX_RADIUS = 35.0
+
+local function getMyFolder()
+    for _, f in pairs(workspace.Plates:GetChildren()) do
+        local owner = f:FindFirstChild("Owner")
+        if owner and (tostring(owner.Value) == lp.Name or tostring(owner.Value) == tostring(lp.UserId)) then
+            return f
+        end
+    end
+    return nil
+end
+
+local function getNearestPlayer()
+    local nearest, dist = nil, GRAB_HITBOX_RADIUS
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character and p.Character:FindFirstChild("HumanoidRootPart") and spawnPivot then
+            local d = (p.Character.HumanoidRootPart.Position - spawnPivot.Position).Magnitude
+            if d < dist then
+                dist = d
+                nearest = p.Character.HumanoidRootPart
+            end
+        end
+    end
+    return nearest
+end
+
+local function getLockedTarget(dt)
+    lockedTargetTimer = lockedTargetTimer + dt
+    if lockedTarget and lockedTarget.Parent and lockedTargetTimer < LOCK_DURATION then
+        return lockedTarget
+    end
+    local nearest = getNearestPlayer()
+    if nearest ~= lockedTarget then
+        lockedTarget = nearest
+        lockedTargetTimer = 0
+    end
+    return lockedTarget
+end
+
+local function clearDummy()
+    for _, group in pairs(DummyParts) do
+        for _, p in ipairs(group) do p:Destroy() end
+        table.clear(group)
+    end
+    dummyActive = false
+end
+
+local function build3D()
+    clearDummy()
+    local folder = getMyFolder()
+    if not (folder and folder:FindFirstChild("Plate")) then return end
+    spawnPivot = folder.Plate.CFrame * CFrame.new(0, 4, 0) * CFrame.Angles(0, math.pi, 0)
+
+    local function spawnCustomStructure(layoutMap, targetTable)
+        for _, item in ipairs(layoutMap) do
+            local part = nil
+            local conn = folder.DescendantAdded:Connect(function(p)
+                if p:IsA("BasePart") and p.Name ~= "Plate" then part = p end
+            end)
+            stampRemote:InvokeServer(item.id, spawnPivot * CFrame.new(0, 60, 0), "{36e9d98d-9757-4da1-ba5d-b9bbeb0097ba}", {}, 0)
+            local start = tick()
+            repeat task.wait() until part or (tick() - start > 1)
+            conn:Disconnect()
+            if part then
+                part:SetAttribute("GridPos", item.pos)
+                if item.isEye then part:SetAttribute("IsEye", item.isEye) end
+                table.insert(targetTable, part)
+            end
+            task.wait(0.12)
+        end
+    end
+
+    local headLayout = {}
+    for z = 0, 2 do
+        for y = 0, 2 do
+            for x = 0, 3 do
+                table.insert(headLayout, {id = IDs.Yellow, pos = Vector3.new(x - 0.5, y, z)})
+            end
+        end
+    end
+    table.insert(headLayout, {id = IDs.Black, pos = Vector3.new(0, 1, 3), isEye = "Left"})
+    table.insert(headLayout, {id = IDs.Black, pos = Vector3.new(2.5, 1, 3), isEye = "Right"})
+
+    local torsoLayout = {}
+    for z = 0, 2 do
+        for y = 0, 2 do
+            for x = 0, 3 do
+                table.insert(torsoLayout, {id = IDs.Yellow, pos = Vector3.new(x - 0.5, y, z)})
+            end
+        end
+    end
+    table.insert(torsoLayout, {id = IDs.Black, pos = Vector3.new(0.5, 2, -1)})
+    table.insert(torsoLayout, {id = IDs.Black, pos = Vector3.new(1.5, 2, -1)})
+
+    local armLLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)}, {id = IDs.Yellow, pos = Vector3.new(0, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 1)}, {id = IDs.Yellow, pos = Vector3.new(0, 1, 1)}
+    }
+    local armRLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)}, {id = IDs.Yellow, pos = Vector3.new(0, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 1)}, {id = IDs.Yellow, pos = Vector3.new(0, 1, 1)}
+    }
+
+    local legLLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)}, {id = IDs.Yellow, pos = Vector3.new(1, 0, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 1, 0)}, {id = IDs.Yellow, pos = Vector3.new(1, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 1)}, {id = IDs.Yellow, pos = Vector3.new(1, 0, 1)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 1, 1)}, {id = IDs.Yellow, pos = Vector3.new(1, 1, 1)}
+    }
+    local legRLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)}, {id = IDs.Yellow, pos = Vector3.new(-1, 0, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 1, 0)}, {id = IDs.Yellow, pos = Vector3.new(-1, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 1)}, {id = IDs.Yellow, pos = Vector3.new(-1, 0, 1)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 1, 1)}, {id = IDs.Yellow, pos = Vector3.new(-1, 1, 1)}
+    }
+
+    local earLLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(-0.5, 1, 0)},
+        {id = IDs.Black, pos = Vector3.new(-1, 2, 0)}
+    }
+    local earRLayout = {
+        {id = IDs.Yellow, pos = Vector3.new(0, 0, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0.5, 1, 0)},
+        {id = IDs.Black, pos = Vector3.new(1, 2, 0)}
+    }
+
+    local cheekLLayout = {{id = IDs.Red, pos = Vector3.new(0, 0, 0)}}
+    local cheekRLayout = {{id = IDs.Red, pos = Vector3.new(0, 0, 0)}}
+
+    local tailLayout = {
+        {id = IDs.Black, pos = Vector3.new(0, 0, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(0, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(1, 1, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(1, 2, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(2, 2, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(2, 3, 0)},
+        {id = IDs.Yellow, pos = Vector3.new(3, 3, 0)}
+    }
+
+    spawnCustomStructure(headLayout, DummyParts.Head)
+    spawnCustomStructure(torsoLayout, DummyParts.Torso)
+    spawnCustomStructure(armLLayout, DummyParts.LArm)
+    spawnCustomStructure(armRLayout, DummyParts.RArm)
+    spawnCustomStructure(legLLayout, DummyParts.LLeg)
+    spawnCustomStructure(legRLayout, DummyParts.RLeg)
+    spawnCustomStructure(earLLayout, DummyParts.LEar)
+    spawnCustomStructure(earRLayout, DummyParts.REar)
+    spawnCustomStructure(cheekLLayout, DummyParts.CheekL)
+    spawnCustomStructure(cheekRLayout, DummyParts.CheekR)
+    spawnCustomStructure(tailLayout, DummyParts.Tail)
+
+    dummyActive = true
+end
+
+-- ============================================================
+-- Modern Minimizable UI (Pikachu Palette)
+-- ============================================================
+local screenGui = Instance.new("ScreenGui", (gethui and gethui()) or lp.PlayerGui)
+screenGui.ResetOnSpawn = false
+
+local mainFrame = Instance.new("Frame", screenGui)
+mainFrame.Size = UDim2.new(0, 190, 0, 280)
+mainFrame.Position = UDim2.new(0.5, -95, 0.5, -140)
+mainFrame.BackgroundColor3 = C_MAIN
+mainFrame.Active, mainFrame.Draggable = true, true
+mainFrame.ClipsDescendants = true
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 8)
+
+local stroke = Instance.new("UIStroke", mainFrame)
+stroke.Color = C_PIKA_Y
+stroke.Thickness = 1.5
+
+-- Top Bar Header
+local topBar = Instance.new("Frame", mainFrame)
+topBar.Size = UDim2.new(1, 0, 0, 28)
+topBar.BackgroundColor3 = C_CARD
+topBar.BorderSizePixel = 0
+
+local title = Instance.new("TextLabel", topBar)
+title.Size = UDim2.new(1, -30, 1, 0)
+title.Position = UDim2.new(0, 8, 0, 0)
+title.Text = "⚡ PIKACHU RIG"
+title.TextColor3 = C_PIKA_Y
+title.Font = Enum.Font.FredokaOne
+title.TextSize = 12
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.BackgroundTransparency = 1
+
+local minBtn = Instance.new("TextButton", topBar)
+minBtn.Size = UDim2.new(0, 20, 0, 20)
+minBtn.Position = UDim2.new(1, -24, 0.5, -10)
+minBtn.BackgroundColor3 = C_MAIN
+minBtn.Text = "-"
+minBtn.TextColor3 = C_TEXT
+minBtn.Font = Enum.Font.GothamBold
+minBtn.TextSize = 12
+Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 4)
+
+-- Scrolling Container
+local container = Instance.new("Frame", mainFrame)
+container.Size = UDim2.new(1, -10, 1, -34)
+container.Position = UDim2.new(0, 5, 0, 30)
+container.BackgroundTransparency = 1
+
+local scroll = Instance.new("ScrollingFrame", container)
+scroll.Size = UDim2.new(1, 0, 1, 0)
+scroll.BackgroundTransparency = 1
+scroll.ScrollBarThickness = 2
+scroll.ScrollBarImageColor3 = C_PIKA_Y
+scroll.CanvasSize = UDim2.new(0, 0, 0, 240)
+
+local uiList = Instance.new("UIListLayout", scroll)
+uiList.SortOrder = Enum.SortOrder.LayoutOrder
+uiList.Padding = UDim.new(0, 4)
+
+local function makeStyledBtn(text, order)
+    local b = Instance.new("TextButton", scroll)
+    b.Size = UDim2.new(1, -4, 0, 25)
+    b.BackgroundColor3 = C_CARD
+    b.Text, b.TextColor3, b.Font, b.TextSize = text, C_TEXT, Enum.Font.GothamBold, 9
+    b.LayoutOrder = order
+    
+    local btnCorner = Instance.new("UICorner", b)
+    btnCorner.CornerRadius = UDim.new(0, 5)
+
+    local btnStroke = Instance.new("UIStroke", b)
+    btnStroke.Color = Color3.fromRGB(45, 45, 55)
+    btnStroke.Thickness = 1
+    
+    return b, btnStroke
+end
+
+local btn, btnS           = makeStyledBtn("SPAWN DUMMY", 1)
+local waveBtn, waveS       = makeStyledBtn("EXPRESSION: SPARK WAVE", 2)
+local sitBtn, sitS        = makeStyledBtn("SIT DOWN", 3)
+local shakeBtn, shakeS    = makeStyledBtn("GROUND SHAKE: OFF", 4)
+local spinBtn, spinS      = makeStyledBtn("CUTE 1-LEG SPIN", 5)
+local grabBtn, grabS      = makeStyledBtn("REACH & PICK UP: OFF", 6)
+local lookBtn, lookS      = makeStyledBtn("EYE CONTACT: OFF", 7)
+local followBtn, followS  = makeStyledBtn("FOLLOW OWNER: OFF", 8)
+
+btn.TextColor3 = C_PIKA_Y
+btnS.Color = C_PIKA_Y
+
+-- Minimize Action
+local isMinimized = false
+minBtn.MouseButton1Click:Connect(function()
+    isMinimized = not isMinimized
+    minBtn.Text = isMinimized and "+" or "-"
+    local targetSize = isMinimized and UDim2.new(0, 190, 0, 28) or UDim2.new(0, 190, 0, 280)
+    TweenService:Create(mainFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = targetSize}):Play()
+end)
+
+-- Button Mechanics
+btn.MouseButton1Click:Connect(build3D)
+
+waveBtn.MouseButton1Click:Connect(function()
+    if dummyActive and not isWaving and not isFollowing then
+        task.spawn(function()
+            isWaving = true
+            task.wait(3.5)
+            isWaving = false
+        end)
+    end
+end)
+
+sitBtn.MouseButton1Click:Connect(function()
+    if not dummyActive then return end
+    isSitting = not isSitting
+    sitBtn.BackgroundColor3 = isSitting and C_PIKA_Y or C_CARD
+    sitBtn.TextColor3 = isSitting and C_MAIN or C_TEXT
+    sitBtn.Text = isSitting and "STAND UP" or "SIT DOWN"
+    if isSitting then
+        isFollowing = false
+        followBtn.BackgroundColor3 = C_CARD
+        followBtn.TextColor3 = C_TEXT
+        followBtn.Text = "FOLLOW OWNER: OFF"
+    end
+end)
+
+shakeBtn.MouseButton1Click:Connect(function()
+    if not dummyActive then return end
+    isShaking = not isShaking
+    shakeBtn.BackgroundColor3 = isShaking and C_PIKA_Y or C_CARD
+    shakeBtn.TextColor3 = isShaking and C_MAIN or C_TEXT
+    shakeBtn.Text = isShaking and "GROUND SHAKE: ON" or "GROUND SHAKE: OFF"
+
+    if isShaking then
+        task.spawn(function()
+            local lightBlue = Color3.new(0.695501, 0.989937, 0.992157)
+            local whiteColor = Color3.new(1, 1, 1)
+            local toggle = false
+            
+            while isShaking do
+                toggle = not toggle
+                local currentColor = toggle and lightBlue or whiteColor
+                updateBaseColorRemote:FireServer(currentColor)
+                task.wait(0.08)
+            end
+        end)
+    end
+end)
+
+spinBtn.MouseButton1Click:Connect(function()
+    if dummyActive and not isSpinning then
+        task.spawn(function()
+            isSpinning = true
+            task.wait(1.8)
+            isSpinning = false
+        end)
+    end
+end)
+
+grabBtn.MouseButton1Click:Connect(function()
+    if not dummyActive then return end
+    isGrabMode = not isGrabMode
+    grabBtn.BackgroundColor3 = isGrabMode and C_PIKA_Y or C_CARD
+    grabBtn.TextColor3 = isGrabMode and C_MAIN or C_TEXT
+    grabBtn.Text = isGrabMode and "REACH & PICK UP: ON" or "REACH & PICK UP: OFF"
+end)
+
+lookBtn.MouseButton1Click:Connect(function()
+    if not dummyActive then return end
+    lookAtSelf = not lookAtSelf
+    lookBtn.BackgroundColor3 = lookAtSelf and C_PIKA_Y or C_CARD
+    lookBtn.TextColor3 = lookAtSelf and C_MAIN or C_TEXT
+    lookBtn.Text = lookAtSelf and "EYE CONTACT: ON" or "EYE CONTACT: OFF"
+end)
+
+followBtn.MouseButton1Click:Connect(function()
+    if not dummyActive then return end
+    isFollowing = not isFollowing
+    followBtn.BackgroundColor3 = isFollowing and C_PIKA_Y or C_CARD
+    followBtn.TextColor3 = isFollowing and C_MAIN or C_TEXT
+    followBtn.Text = isFollowing and "FOLLOW OWNER: ON" or "FOLLOW OWNER: OFF"
+    if isFollowing then
+        isSitting = false
+        sitBtn.BackgroundColor3 = C_CARD
+        sitBtn.TextColor3 = C_TEXT
+        sitBtn.Text = "SIT DOWN"
+    end
+end)
+
+-- ============================================================
+-- Pikachu Animation Engine
+-- ============================================================
+local angle = 0
+RunService.Heartbeat:Connect(function(dt)
+    if not (dummyActive and spawnPivot) then return end
+    angle = angle + dt
+
+    sitLerp = math.clamp(sitLerp + (isSitting and dt * 2.2 or -dt * 2.2), 0, 1)
+    local sitEased = sitLerp * sitLerp * (3 - 2 * sitLerp)
+
+    lookLerp = math.clamp(lookLerp + (lookAtSelf and dt * 1.5 or -dt * 2.0), 0, 1)
+    local lookEased = lookLerp * lookLerp * (3 - 2 * lookLerp)
+
+    spinLerp = math.clamp(spinLerp + (isSpinning and dt * 3.0 or -dt * 2.5), 0, 1)
+    local spinEased = spinLerp * spinLerp * (3 - 2 * spinLerp)
+
+    shakeLerp = math.clamp(shakeLerp + (isShaking and dt * 3.0 or -dt * 2.5), 0, 1)
+    local shakeEased = shakeLerp * shakeLerp * (3 - 2 * shakeLerp)
+    
+    -- Fixed Single-Direction Continuous Spin Acceleration & Friction Decay
+    local targetSpinSpeed = isSpinning and 7.5 or 0
+    currentSpinSpeed = currentSpinSpeed + (targetSpinSpeed - currentSpinSpeed) * math.min(dt * 5.0, 1)
+    
+    if currentSpinSpeed < 0.01 and not isSpinning then
+        currentSpinSpeed = 0
+    end
+    
+    spinAngle = (spinAngle + dt * currentSpinSpeed) % (math.pi * 2)
+
+    -- Expanded Target detection for Pick Up / Reach mode (Larger Hitbox)
+    local nearTarget = getNearestPlayer()
+    local nearDist = 999
+    if nearTarget and spawnPivot then
+        nearDist = (nearTarget.Position - spawnPivot.Position).Magnitude
+    end
+
+    local wantsGrab = isGrabMode and nearTarget and (nearDist < GRAB_HITBOX_RADIUS)
+    grabLerp = math.clamp(grabLerp + (wantsGrab and dt * 4.0 or -dt * 3.0), 0, 1)
+    local grabEased = grabLerp * grabLerp * (3 - 2 * grabLerp)
+
+    -- 1. BASE MATH & ANIME IDLE SWAY
+    local breathAmp        = 0.25 - (0.12 * sitEased)
+    local breathePrimary   = math.sin(angle * 2.2) * breathAmp
+    local breatheSecondary = math.sin(angle * 4.5) * 0.05
+    local breathe          = breathePrimary + breatheSecondary
+
+    local headSway    = math.sin(angle * 1.1) * 0.12
+    local torsoSway   = math.cos(angle * 1.3) * 0.08
+    local breatheLean = math.sin(angle * 2.2) * 0.04
+
+    waveLerp = math.clamp(waveLerp + (isWaving and dt * 4.0 or -dt * 3.0), 0, 1)
+
+    -- Dedicated Spark Shake Wave
+    local jitter = math.sin(angle * 28.0) * 0.12
+    local waveBodySway = jitter * waveLerp
+
+    local activePos = CFrame.new((blockGap * 2.2 + jointGap), (blockGap * 1.6 + jitter), (blockGap * 0.8))
+    local activeRot = CFrame.Angles(math.rad(100) + jitter, jitter * 2, math.rad(20))
+    local leftArmActivePos = nil
+    local leftArmActiveRot = nil
+
+    local microIdleHead = math.noise(angle * 2.5, 0, 0) * 0.06
+    local microIdleArm  = math.noise(0, angle * 2.0, 0) * 0.08
+
+    -- Ground Shake Jitter & Sway
+    local shakeFreq = angle * 14.0
+    local shakeX = math.sin(shakeFreq) * 0.1 * shakeEased
+    local shakeY = math.sin(shakeFreq * 2.0) * 0.08 * shakeEased
+    local shakeZ = math.cos(shakeFreq * 0.8) * 0.1 * shakeEased
+
+    local totalLegHeight = (blockGap * 2) + jointGap - BakedSettings.LegHeight
+    local standHeight   = totalLegHeight + breathe + BakedSettings.BodyHeight
+    local sitHeight     = (blockGap * 0.8) + (breathe * 0.3) + BakedSettings.BodyHeight
+    local currentHeight = standHeight + (sitHeight - standHeight) * sitEased
+
+    -- 2. FOLLOW MOVEMENT
+    local selfRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+    local isMoving = false
+    local moveDir  = Vector3.zero
+
+    if isFollowing and selfRoot and not isSitting then
+        local myPos   = spawnPivot.Position
+        local goalPos = selfRoot.Position
+        local flatDir = (goalPos - myPos) * Vector3.new(1, 0, 1)
+        local dist    = flatDir.Magnitude
+
+        if dist > STOP_DISTANCE then
+            isMoving = true
+            moveDir  = flatDir.Unit
+            local step   = math.min(FOLLOW_SPEED * dt, dist - STOP_DISTANCE)
+            local newPos = myPos + moveDir * step
+            spawnPivot   = CFrame.new(newPos.X, spawnPivot.Position.Y, newPos.Z)
+                         * CFrame.Angles(0, spawnPivot:ToEulerAnglesYXZ())
+        end
+    end
+
+    walkLerp = math.clamp(walkLerp + (isMoving and dt * 3.5 or -dt * 3.0), 0, 1)
+    local walkEased = walkLerp * walkLerp * (3 - 2 * walkLerp)
+    walkAngle = walkAngle + (isMoving and dt * WALK_STEP_SPEED or 0)
+
+    local walkSin = math.sin(walkAngle)
+    local walkCos = math.cos(walkAngle)
+    local walkBob = math.abs(walkCos) * 0.22 * walkEased
+
+    local armAngle = walkAngle * WALK_ARM_SPEED
+    local armSin   = math.sin(armAngle)
+
+    -- 3. LOOK YAW
+    local targetLookYaw = smoothedLookYaw
+
+    if isFollowing and selfRoot then
+        if isMoving and moveDir.Magnitude > 0 then
+            targetLookYaw = math.atan2(moveDir.X, moveDir.Z)
+        else
+            local dir = (selfRoot.Position - spawnPivot.Position) * Vector3.new(1, 0, 1)
+            if dir.Magnitude > 0.1 then
+                targetLookYaw = math.atan2(dir.X, dir.Z)
+            end
+        end
+    elseif selfRoot then
+        local dir = (selfRoot.Position - spawnPivot.Position) * Vector3.new(1, 0, 1)
+        if dir.Magnitude > 0.1 then
+            targetLookYaw = math.atan2(dir.X, dir.Z)
+        end
+    end
+
+    local yawDiff   = ((targetLookYaw - smoothedLookYaw + math.pi) % (math.pi * 2)) - math.pi
+    local yawSpeed  = isMoving and 4.5 or 1.0
+    smoothedLookYaw = smoothedLookYaw + yawDiff * math.min(dt * yawSpeed, 1)
+
+    local spawnYaw      = math.atan2(spawnPivot.LookVector.X, spawnPivot.LookVector.Z)
+    local fullYawOffset = ((smoothedLookYaw - spawnYaw) % (math.pi * 2)) - math.pi
+    local yawApply      = isFollowing and fullYawOffset or (fullYawOffset * lookEased)
+
+    local spinBob = currentSpinSpeed > 0.1 and (math.sin(angle * 8) * 0.12 * spinEased) or 0
+    local baseRoot = spawnPivot * CFrame.new(shakeX, currentHeight + walkBob + spinBob + shakeY, shakeZ)
+                   * CFrame.Angles(0, yawApply + spinAngle, 0)
+
+    -- 4. TORSO
+    local sitSlouch     = 0.04 * sitEased
+    local walkLean      = 0.08 * walkEased
+    local walkTorsoYaw  = math.sin(walkAngle * 0.5) * WALK_TORSO_SWAY * walkEased
+    local walkTorsoRoll = armSin * WALK_ARM_PITCH * (WALK_TORSO_SWAY * 1.2) * walkEased
+    local spinTorsoTilt = math.rad(-5) * spinEased
+
+    -- Ground Shake Deep Forward Kneeling Dip
+    local shakeTorsoTilt = math.rad(ShakeAnimSettings.TorsoTiltDeg) * shakeEased
+    local shakeJitterRot = (math.sin(shakeFreq) * 0.05) * shakeEased
+
+    local targetTorsoRot = CFrame.Angles(
+        (-0.06 * waveLerp) + (breathe * 0.03) + breatheLean + sitSlouch + walkLean + spinTorsoTilt + (0.15 * grabEased) + shakeTorsoTilt,
+        torsoSway * (1 - walkEased) + (waveBodySway * 0.6) + walkTorsoYaw + shakeJitterRot,
+        (math.sin(angle * 3.5) * 0.06 * waveLerp * (1 - walkEased))
+        + (microIdleHead * 0.5 * (1 - walkEased))
+        + walkTorsoRoll
+        + (math.rad(8) * spinEased)
+        + shakeJitterRot
+    )
+
+    local target = getLockedTarget(dt)
+
+    if target and not isFollowing and not isShaking then
+        local dir = baseRoot:VectorToObjectSpace((target.Position - baseRoot.Position).Unit)
+        targetTorsoRot = targetTorsoRot * CFrame.Angles(0, math.clamp(dir.X, -0.28, 0.28), 0)
+    end
+    smoothedTorsoRot = smoothedTorsoRot:Lerp(targetTorsoRot, dt * 5)
+    local torsoCFrame = baseRoot * CFrame.new(-blockGap * 1.0, 0, 0) * smoothedTorsoRot
+
+    local function pos3D(group, relativeOffset, rot, customParent)
+        local parent = customParent or torsoCFrame
+        local limbPivot = parent * relativeOffset
+        for _, p in ipairs(group) do
+            local g = p:GetAttribute("GridPos") or Vector3.zero
+            local eyeOffset = Vector3.zero
+            local eyeTag = p:GetAttribute("IsEye")
+            if eyeTag then
+                local spreadSign = (eyeTag == "Left") and -1 or 1
+                eyeOffset = Vector3.new(
+                    BakedSettings.EyeX + (BakedSettings.EyeSpread * spreadSign),
+                    BakedSettings.EyeY,
+                    BakedSettings.EyeZ
+                )
+            end
+            p.CFrame = limbPivot * rot * CFrame.new((g.X * blockGap) + eyeOffset.X, (g.Y * blockGap) + eyeOffset.Y, (g.Z * blockGap) + eyeOffset.Z)
+            p.AssemblyLinearVelocity = Vector3.zero
+            p.AssemblyAngularVelocity = Vector3.zero
+        end
+    end
+
+    for _, p in ipairs(DummyParts.Torso) do
+        local g = p:GetAttribute("GridPos") or Vector3.zero
+        p.CFrame = torsoCFrame * CFrame.new(g.X * blockGap, g.Y * blockGap, g.Z * blockGap)
+        p.AssemblyLinearVelocity = Vector3.zero
+        p.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    -- 5. HEAD & ANIME EARS / CHEEKS
+    local breatheNod   = math.sin(angle * 2.2) * 0.05
+    local headWorldPos = (torsoCFrame * CFrame.new(0, (blockGap * 2.5) + jointGap, 0)).Position
+
+    -- Downtilted Head Pitch during Ground Shake
+    local shakeHeadTilt = math.rad(-ShakeAnimSettings.HeadPitchDeg) * shakeEased
+
+    local targetHeadRot = CFrame.Angles(
+        0.15 + breatheNod + (breathe * 0.06) + shakeHeadTilt,
+        headSway * (1 - walkEased) + microIdleHead + (shakeJitterRot * 0.5),
+        headSway * 0.5 * (1 - walkEased)
+    )
+
+    if target and not isFollowing and not isShaking then
+        local dir = torsoCFrame:VectorToObjectSpace((target.Position - headWorldPos).Unit)
+        local yaw   = math.clamp(math.atan2(dir.X, dir.Z), -0.4, 0.4)
+        local pitch = math.clamp(-math.asin(dir.Y), -0.25, 0.3)
+        local sitCuriousTilt = 0.08 * sitEased
+        targetHeadRot = CFrame.Angles(
+            pitch + sitCuriousTilt,
+            yaw,
+            (math.sin(angle * 4.5) * 0.08) + microIdleHead
+        )
+    end
+    smoothedHeadRot = smoothedHeadRot:Lerp(targetHeadRot, dt * 7)
+    
+    local headPivotOffset = CFrame.new(0, (blockGap * 2.5) + jointGap, -blockGap * 0.2)
+    pos3D(DummyParts.Head, headPivotOffset, smoothedHeadRot)
+
+    -- Ear Vibration / Shaking during Ground Shake
+    local shakeEarJitter = math.sin(shakeFreq * 1.5) * 0.35 * shakeEased
+    local earTwitch = ((math.noise(angle * 3, 0, 0) > 0.2) and math.sin(angle * 25) * 0.15 or 0)
+    
+    local earBaseRotL = CFrame.Angles(0, 0, math.rad(38) + earTwitch + shakeEarJitter) * CFrame.Angles(math.sin(angle * 2.5) * 0.1, 0, 0)
+    local earBaseRotR = CFrame.Angles(0, 0, math.rad(-38) - earTwitch - shakeEarJitter) * CFrame.Angles(math.sin(angle * 2.5) * 0.1, 0, 0)
+    
+    local earOffset = Vector3.new(BakedSettings.EarX, BakedSettings.EarY, BakedSettings.EarZ)
+    pos3D(DummyParts.LEar, headPivotOffset * CFrame.new(-blockGap * 0.8 + earOffset.X, blockGap * 2.8 + earOffset.Y, earOffset.Z), smoothedHeadRot * earBaseRotL)
+    pos3D(DummyParts.REar, headPivotOffset * CFrame.new(blockGap * 2.8 + earOffset.X, blockGap * 2.8 + earOffset.Y, earOffset.Z), smoothedHeadRot * earBaseRotR)
+    
+    local cheekOffset = Vector3.new(BakedSettings.CheekX, BakedSettings.CheekY, BakedSettings.CheekZ)
+    pos3D(DummyParts.CheekL, headPivotOffset * CFrame.new(-blockGap * 0.8 + cheekOffset.X, blockGap * 0.2 + cheekOffset.Y, blockGap * 2.2 + cheekOffset.Z), smoothedHeadRot)
+    pos3D(DummyParts.CheekR, headPivotOffset * CFrame.new(blockGap * 2.8 + cheekOffset.X, blockGap * 0.2 + cheekOffset.Y, blockGap * 2.2 + cheekOffset.Z), smoothedHeadRot)
+
+    -- 6. TAIL
+    local tailSpeedMultiplier = isMoving and 2.2 or (1.0 + (shakeEased * 2.0))
+    local tailWag = math.sin(angle * (4.5 * tailSpeedMultiplier)) * (0.35 + (0.2 * shakeEased))
+    local customTailRot = CFrame.Angles(math.rad(BakedSettings.TailRotX), math.rad(BakedSettings.TailRotY), math.rad(BakedSettings.TailRotZ))
+    local tailRot = CFrame.Angles(math.rad(30 + (shakeEased * 15)), tailWag, math.rad(12)) * customTailRot
+    pos3D(DummyParts.Tail, CFrame.new(blockGap * 1.0, blockGap * 0.5, -blockGap * 1.5 - BakedSettings.TailSpread), tailRot)
+
+    -- 7. ARMS
+    local customLArmPos = CFrame.new(BakedSettings.LArmX, BakedSettings.LArmY, BakedSettings.LArmZ)
+    local customLArmRot = CFrame.Angles(math.rad(BakedSettings.LArmRotX), math.rad(BakedSettings.LArmRotY), math.rad(BakedSettings.LArmRotZ))
+
+    local customRArmPos = CFrame.new(BakedSettings.RArmX, BakedSettings.RArmY, BakedSettings.RArmZ)
+    local customRArmRot = CFrame.Angles(math.rad(BakedSettings.RArmRotX), math.rad(BakedSettings.RArmRotY), math.rad(BakedSettings.RArmRotZ))
+
+    local armZ          = -blockGap * 0.2
+    local sitArmBreathe = breathe * 0.3
+
+    local walkArmNeutralZ = armZ + (blockGap * WALK_ARM_OFFSET_Z * walkEased)
+    local walkArmPitchL   =  armSin * WALK_ARM_PITCH * walkEased
+    local walkArmPitchR   = -armSin * WALK_ARM_PITCH * walkEased
+    local walkArmRollL    =  math.sin(armAngle * 0.5) * 0.08 * walkEased
+    local walkArmRollR    = -walkArmRollL
+
+    -- Sitting Paws forward
+    local sitLArmPos = CFrame.new(-(blockGap * 1.1 + jointGap), -blockGap * 0.1 + sitArmBreathe, blockGap * 1.1)
+    local sitLArmRot = CFrame.Angles(math.rad(55), 0.3, math.rad(-20))
+
+    local sitRArmPos = CFrame.new(blockGap * 2.1 + jointGap, -blockGap * 0.1 + sitArmBreathe, blockGap * 1.1)
+    local sitRArmRot = CFrame.Angles(math.rad(55), -0.3, math.rad(20))
+
+    -- Spin Arm Poses
+    local spinLArmPos = CFrame.new(-(blockGap * 1.8 + jointGap), blockGap * 0.6, blockGap * 0.2)
+    local spinLArmRot = CFrame.Angles(math.rad(15), math.rad(-20), math.rad(-80))
+
+    local spinRArmPos = CFrame.new(blockGap * 2.8 + jointGap, blockGap * 0.6, blockGap * 0.2)
+    local spinRArmRot = CFrame.Angles(math.rad(15), math.rad(20), math.rad(80))
+
+    -- Reach & Pick Up Arm Poses
+    local grabPulse = math.sin(angle * 8.0) * 0.2
+    local grabLArmPos = CFrame.new(-(blockGap * 0.1 + jointGap), blockGap * 1.0, blockGap * 2.8 + grabPulse)
+    local grabLArmRot = CFrame.Angles(math.rad(85), math.rad(40), math.rad(-20))
+
+    local grabRArmPos = CFrame.new(blockGap * 1.3 + jointGap, blockGap * 1.0, blockGap * 2.8 + grabPulse)
+    local grabRArmRot = CFrame.Angles(math.rad(85), math.rad(-40), math.rad(20))
+
+    -- Ground Shake Rapid Arm Vibrations / Dynamic Offsets
+    local shakeArmJitter = math.sin(shakeFreq * 1.8) * 0.25 * shakeEased
+    local shakeLArmPos = CFrame.new(-(blockGap * 0.6 + jointGap) + ShakeAnimSettings.LArmX, ShakeAnimSettings.LArmY + shakeArmJitter, blockGap * ShakeAnimSettings.LArmZ)
+    local shakeLArmRot = CFrame.Angles(math.rad(70) + shakeArmJitter, math.rad(25), math.rad(-30))
+
+    local shakeRArmPos = CFrame.new(blockGap * ShakeAnimSettings.RArmX + jointGap, ShakeAnimSettings.RArmY - shakeArmJitter, blockGap * ShakeAnimSettings.RArmZ)
+    local shakeRArmRot = CFrame.Angles(math.rad(70) - shakeArmJitter, math.rad(-25), math.rad(30))
+
+    local lArmIdleSwing = math.sin(angle * 0.85) * 0.05 * (1 - walkEased)
+    local standLArmPos  = CFrame.new(
+        -(blockGap * 1.0 + jointGap) + (0.2 * waveLerp),
+        0.2 + lArmIdleSwing,
+        walkArmNeutralZ + blockGap * 0.8
+    ) * customLArmPos
+    local standLArmRot = CFrame.Angles(
+        0.4 + lArmIdleSwing + walkArmPitchL,
+        0.4 + walkArmRollL,
+        0.2
+    ) * customLArmRot
+
+    local finalLeftArmPos = standLArmPos
+    local finalLeftArmRot = standLArmRot
+
+    local lArmBase = finalLeftArmPos:Lerp(sitLArmPos, sitEased):Lerp(spinLArmPos, spinEased):Lerp(grabLArmPos, grabEased):Lerp(shakeLArmPos, shakeEased)
+    local lArmRotBase = finalLeftArmRot:Lerp(sitLArmRot, sitEased):Lerp(spinLArmRot, spinEased):Lerp(grabLArmRot, grabEased):Lerp(shakeLArmRot, shakeEased)
+
+    pos3D(DummyParts.LArm, lArmBase, lArmRotBase)
+
+    local idleArmRot = CFrame.Angles(
+        0.4 + microIdleArm * (1 - walkEased) + walkArmPitchR,
+        -0.4 + walkArmRollR,
+        -0.2
+    ) * customRArmRot
+
+    local finalActivePos = activePos * customRArmPos
+    local finalActiveRot = activeRot * customRArmRot
+
+    local idlePos = CFrame.new(
+        blockGap * 2.0 + jointGap,
+        0.2,
+        walkArmNeutralZ + blockGap * 0.8
+    ) * customRArmPos
+
+    local rArmBasePos = idlePos:Lerp(finalActivePos, waveLerp)
+    local rArmBaseRot = idleArmRot:Lerp(finalActiveRot, waveLerp)
+
+    local sitBlend = sitEased * (1 - waveLerp)
+    local rArmBase = rArmBasePos:Lerp(sitRArmPos, sitBlend):Lerp(spinRArmPos, spinEased):Lerp(grabRArmPos, grabEased):Lerp(shakeRArmPos, shakeEased)
+    local rArmRotBase = rArmBaseRot:Lerp(sitRArmRot, sitBlend):Lerp(spinRArmRot, spinEased):Lerp(grabRArmRot, grabEased):Lerp(shakeRArmRot, shakeEased)
+
+    pos3D(DummyParts.RArm, rArmBase, rArmRotBase)
+
+    -- 8. LEGS
+    local shyShift  = math.sin(angle * 0.5) * 0.06 * (1 - walkEased)
+    local shyBounce = math.sin(angle * 2.0) * 0.04 * (1 - walkEased)
+
+    local pigeonL =  0.22 * (1 - walkEased)
+    local pigeonR = -0.22 * (1 - walkEased)
+
+    local hipL = -blockGap * 0.5 + legIdleX - legSpreadApart - (blockGap * WALK_LEG_SPREAD * walkEased)
+    local hipR =  blockGap * 0.5 + legIdleX + legSpreadApart + (blockGap * WALK_LEG_SPREAD * walkEased)
+
+    local fidgetCycle = math.sin(angle * 1.5)
+    local fidgetL = math.max(0,  fidgetCycle) * 0.05 * (1 - walkEased)
+    local fidgetR = math.max(0, -fidgetCycle) * 0.05 * (1 - walkEased)
+
+    local curiousLean = 0
+    if target and not isFollowing then
+        local dist = (baseRoot.Position - target.Position).Magnitude
+        curiousLean = math.clamp((18 - dist) / 18, 0, 1) * 0.08
+    end
+
+    local lLegRaise = shyBounce + fidgetL + curiousLean + legIdleY
+    local rLegRaise = shyBounce + fidgetR + curiousLean + legIdleY
+
+    local walkLPitch =  walkSin * WALK_LEG_PITCH * walkEased
+    local walkRPitch = -walkSin * WALK_LEG_PITCH * walkEased
+
+    local legYawL =  0.1 * (1 - walkEased)
+    local legYawR = -0.1 * (1 - walkEased)
+
+    local walkLLift = math.max(0,  walkSin) * blockGap * WALK_LEG_LIFT * walkEased
+    local walkRLift = math.max(0, -walkSin) * blockGap * WALK_LEG_LIFT * walkEased
+
+    local standLLegPos = CFrame.new(hipL, -totalLegHeight + lLegRaise + walkLLift, shyShift + legIdleZ)
+    local standLLegRot = CFrame.Angles(walkLPitch + (curiousLean * 0.3), legYawL, pigeonL + shyShift)
+
+    local standRLegPos = CFrame.new(hipR, -totalLegHeight + rLegRaise + walkRLift, -shyShift + legIdleZ)
+    local standRLegRot = CFrame.Angles(walkRPitch + (curiousLean * 0.3), legYawR, pigeonR - shyShift)
+
+    local sitLegBreathe = breathe * 0.25
+
+    local sitLLegPos = CFrame.new(-blockGap * 1.8 + legIdleX - legSpreadApart, -blockGap * 0.2 + sitLegBreathe + legIdleY, blockGap * 1.9 + legIdleZ)
+    local sitLLegRot = CFrame.Angles(math.rad(95), math.rad(15), 0.18)
+
+    local sitRLegPos = CFrame.new(-blockGap * 0.2 + legIdleX + legSpreadApart, -blockGap * 0.2 + sitLegBreathe + legIdleY, blockGap * 1.9 + legIdleZ)
+    local sitRLegRot = CFrame.Angles(math.rad(95), math.rad(-15), -0.18)
+
+    -- Cute One-Leg Spin Leg Offsets
+    local spinLLegPos = CFrame.new(-blockGap * 0.2 + legIdleX, -totalLegHeight + 0.8, legIdleZ)
+    local spinLLegRot = CFrame.Angles(math.rad(-10), 0, math.rad(-5))
+
+    local spinRLegPos = CFrame.new(blockGap * 1.5 + legIdleX, -totalLegHeight + 3.2, legIdleZ + 0.8)
+    local spinRLegRot = CFrame.Angles(math.rad(-65), math.rad(25), math.rad(30))
+
+    -- Ground Shake Kneeling Pose for Legs via Hardcoded Settings
+    local shakeLLegPos = CFrame.new(hipL + ShakeAnimSettings.LLegX, -totalLegHeight + ShakeAnimSettings.LLegY, legIdleZ + ShakeAnimSettings.LLegZ)
+    local shakeLLegRot = CFrame.Angles(math.rad(45), math.rad(10), math.rad(-8))
+
+    local shakeRLegPos = CFrame.new(hipR + ShakeAnimSettings.RLegX, -totalLegHeight + ShakeAnimSettings.RLegY, legIdleZ + ShakeAnimSettings.RLegZ)
+    local shakeRLegRot = CFrame.Angles(math.rad(45), math.rad(-10), math.rad(8))
+
+    local finalLLegPos = standLLegPos:Lerp(sitLLegPos, sitEased):Lerp(spinLLegPos, spinEased):Lerp(shakeLLegPos, shakeEased)
+    local finalLLegRot = standLLegRot:Lerp(sitLLegRot, sitEased):Lerp(spinLLegRot, spinEased):Lerp(shakeLLegRot, shakeEased)
+
+    local finalRLegPos = standRLegPos:Lerp(sitRLegPos, sitEased):Lerp(spinRLegPos, spinEased):Lerp(shakeRLegRot, shakeEased)
+    local finalRLegRot = standRLegRot:Lerp(sitRLegRot, sitEased):Lerp(spinRLegRot, spinEased):Lerp(shakeRLegRot, shakeEased)
+
+    pos3D(DummyParts.LLeg, finalLLegPos, finalLLegRot, baseRoot)
+    pos3D(DummyParts.RLeg, finalRLegPos, finalRLegRot, baseRoot)
+end)
