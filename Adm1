@@ -1,0 +1,1213 @@
+-- Beat It Admin (Target Scoped Hitbox & Lock Hub)
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local TextChatService = game:GetService("TextChatService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+-- Remotes for Locks & Disformation / Triple Abyss
+local stampRemote = ReplicatedStorage:WaitForChild("Remotes", 5) and ReplicatedStorage.Remotes:WaitForChild("StampAsset", 5)
+local deleteRemote = ReplicatedStorage:WaitForChild("Remotes", 5) and ReplicatedStorage.Remotes:WaitForChild("DeleteAsset", 5)
+
+-- Global Control Flags
+local effectAllPlayers = false
+
+-- Live Speed Configuration Variables (Defaults)
+local stampSpeed = 0.08
+local deleteSpeed = 0.08
+
+-- Lock Module Variables
+local lockRange = 500
+local toolLockOn = false
+local bodyLockOn = false
+local lockingState = false
+local bodyParts = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}
+local bodyIdx = 2
+local currentBodyPart = bodyParts[bodyIdx]
+local stampVA = {56449778, 56448980, 56449778, 56448980, 56449778, 56448980}
+local toolSpy = {["1 Stamp"]=1,["2 Delete"]=1,["3 Sword"]=1,["EpicKatana"]=1,["VIP Sword"]=1,["Windforce"]=1,["Venomshank"]=1,["Firebrand"]=1,["Katana"]=1,["RedBallon"]=1,["SpeedCoil"]=1,["GravityCoil"]=1,["GrappleHook"]=1}
+
+-- Target Variable
+local selectedTargetPlayer = nil
+
+-- Triple Abyss Variables
+local tripleAbyssActive = false
+local tripleAbyssTarget = nil
+local lastAbyssTime = 0
+local ABYSS_COOLDOWN = 0.85
+
+-- Disformation Variables
+local disOn = false
+local disForming = false
+local dModes = {"all parts", "HumanoidRootPart", "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}
+local dIdx = 1
+local dCool = 0.65
+local dLast = 0
+local dTgtPlayer = nil
+
+-- Visualizer Ring Container
+local activeLockRings = {}
+
+local function createLockRing(color)
+    local ring = Instance.new("Part")
+    ring.Name = "BeatIt_LockRing"
+    ring.Shape = Enum.PartType.Ball
+    ring.Size = Vector3.new(lockRange * 2, lockRange * 2, lockRange * 2)
+    ring.Color = color or Color3.fromRGB(220, 20, 45)
+    ring.Material = Enum.Material.Neon
+    ring.Transparency = 1
+    ring.CanCollide = false
+    ring.CanTouch = false
+    ring.CanQuery = false
+    ring.Anchored = true
+    ring.Parent = Workspace
+    return ring
+end
+
+-- Allowed Players Manager
+local allowedPlayers = {}
+local playerStates = {}
+local selectedAllowPlayer = nil
+
+local function getPlayerState(plr)
+    if not playerStates[plr.UserId] then
+        playerStates[plr.UserId] = {
+            bodyLockOn = false,
+            toolLockOn = false,
+            tripleAbyssActive = false,
+            tripleAbyssTarget = nil
+        }
+    end
+    return playerStates[plr.UserId]
+end
+
+local function isPlayerAllowed(plr)
+    if not plr then return false end
+    return allowedPlayers[plr.UserId] == true
+end
+
+local function isPlayerAllowedOrSelf(plr)
+    if not plr then return false end
+    if plr == LocalPlayer then return true end
+    return allowedPlayers[plr.UserId] == true
+end
+
+-- UI Container
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "BeatItAdmin"
+ScreenGui.ResetOnSpawn = false
+
+if gethui then
+    ScreenGui.Parent = gethui()
+elseif syn and syn.protect_gui then
+    syn.protect_gui(ScreenGui)
+    ScreenGui.Parent = CoreGui
+else
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+-- Main Window
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 180, 0, 375)
+MainFrame.Position = UDim2.new(0.5, -90, 0.5, -187)
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 14)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.ClipsDescendants = false
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 8)
+MainCorner.Parent = MainFrame
+
+local InnerStroke = Instance.new("UIStroke")
+InnerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+InnerStroke.Color = Color3.fromRGB(240, 240, 245)
+InnerStroke.Thickness = 1.2
+InnerStroke.Transparency = 0.1
+InnerStroke.Parent = MainFrame
+
+local AccentLine = Instance.new("Frame")
+AccentLine.Name = "AccentLine"
+AccentLine.Size = UDim2.new(1, -16, 0, 2)
+AccentLine.Position = UDim2.new(0, 8, 0, 24)
+AccentLine.BackgroundColor3 = Color3.fromRGB(220, 20, 45)
+AccentLine.BorderSizePixel = 0
+AccentLine.Parent = MainFrame
+
+local AccentCorner = Instance.new("UICorner")
+AccentCorner.CornerRadius = UDim.new(1, 0)
+AccentCorner.Parent = AccentLine
+
+local Title = Instance.new("TextLabel")
+Title.Name = "Title"
+Title.Size = UDim2.new(1, -26, 0, 20)
+Title.Position = UDim2.new(0, 8, 0, 2)
+Title.BackgroundTransparency = 1
+Title.Text = "BEAT IT"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 10
+Title.TextScaled = true
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = MainFrame
+
+local TitleSizeConstraint = Instance.new("UITextSizeConstraint")
+TitleSizeConstraint.MaxTextSize = 10
+TitleSizeConstraint.MinTextSize = 7
+TitleSizeConstraint.Parent = Title
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "CloseButton"
+CloseBtn.Size = UDim2.new(0, 16, 0, 16)
+CloseBtn.Position = UDim2.new(1, -18, 0, 4)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(180, 180, 190)
+CloseBtn.TextSize = 12
+CloseBtn.TextScaled = true
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = MainFrame
+
+local CloseBtnSizeConstraint = Instance.new("UITextSizeConstraint")
+CloseBtnSizeConstraint.MaxTextSize = 12
+CloseBtnSizeConstraint.MinTextSize = 8
+CloseBtnSizeConstraint.Parent = CloseBtn
+
+---------------------------------------------------------
+-- TARGETING PANEL
+---------------------------------------------------------
+local TargetFrame = Instance.new("Frame")
+TargetFrame.Name = "TargetFrame"
+TargetFrame.Size = UDim2.new(1, -16, 0, 36)
+TargetFrame.Position = UDim2.new(0, 8, 0, 28)
+TargetFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+TargetFrame.BorderSizePixel = 0
+TargetFrame.Parent = MainFrame
+
+local TargetCorner = Instance.new("UICorner")
+TargetCorner.CornerRadius = UDim.new(0, 6)
+TargetCorner.Parent = TargetFrame
+
+local TargetStroke = Instance.new("UIStroke")
+TargetStroke.Color = Color3.fromRGB(35, 35, 42)
+TargetStroke.Thickness = 1
+TargetStroke.Parent = TargetFrame
+
+local TargetPFP = Instance.new("ImageLabel")
+TargetPFP.Name = "TargetPFP"
+TargetPFP.Size = UDim2.new(0, 28, 0, 28)
+TargetPFP.Position = UDim2.new(0, 4, 0, 4)
+TargetPFP.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+TargetPFP.Image = "rbxassetid://0"
+TargetPFP.Parent = TargetFrame
+
+local PFPCorner = Instance.new("UICorner")
+PFPCorner.CornerRadius = UDim.new(1, 0)
+PFPCorner.Parent = TargetPFP
+
+local UserTextBox = Instance.new("TextBox")
+UserTextBox.Name = "UserTextBox"
+UserTextBox.Size = UDim2.new(1, -58, 1, -8)
+UserTextBox.Position = UDim2.new(0, 36, 0, 4)
+UserTextBox.BackgroundTransparency = 1
+UserTextBox.PlaceholderText = "Target Name..."
+UserTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+UserTextBox.Text = ""
+UserTextBox.TextColor3 = Color3.fromRGB(240, 240, 245)
+UserTextBox.TextSize = 9
+UserTextBox.Font = Enum.Font.GothamMedium
+UserTextBox.TextXAlignment = Enum.TextXAlignment.Left
+UserTextBox.ClearTextOnFocus = false
+UserTextBox.Parent = TargetFrame
+
+local ClickTargetBtn = Instance.new("TextButton")
+ClickTargetBtn.Name = "ClickTargetBtn"
+ClickTargetBtn.Size = UDim2.new(0, 20, 0, 20)
+ClickTargetBtn.Position = UDim2.new(1, -24, 0, 8)
+ClickTargetBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+ClickTargetBtn.Text = "🎯"
+ClickTargetBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ClickTargetBtn.TextSize = 10
+ClickTargetBtn.Font = Enum.Font.GothamBold
+ClickTargetBtn.Parent = TargetFrame
+
+local ClickTargetCorner = Instance.new("UICorner")
+ClickTargetCorner.CornerRadius = UDim.new(0, 4)
+ClickTargetCorner.Parent = ClickTargetBtn
+
+local clickTargetActive = false
+
+---------------------------------------------------------
+-- ALLOW PLAYER & HITBOX & SPEED CONFIG PANEL
+---------------------------------------------------------
+local ConfigFrame = Instance.new("Frame")
+ConfigFrame.Name = "ConfigFrame"
+ConfigFrame.Size = UDim2.new(1, -16, 0, 118)
+ConfigFrame.Position = UDim2.new(0, 8, 0, 68)
+ConfigFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+ConfigFrame.BorderSizePixel = 0
+ConfigFrame.Parent = MainFrame
+
+local ConfigCorner = Instance.new("UICorner")
+ConfigCorner.CornerRadius = UDim.new(0, 6)
+ConfigCorner.Parent = ConfigFrame
+
+local ConfigStroke = Instance.new("UIStroke")
+ConfigStroke.Color = Color3.fromRGB(35, 35, 42)
+ConfigStroke.Thickness = 1
+ConfigStroke.Parent = ConfigFrame
+
+-- Allow Player Box Container with PFP and Toggle Button
+local AllowBoxContainer = Instance.new("Frame")
+AllowBoxContainer.Name = "AllowBoxContainer"
+AllowBoxContainer.Size = UDim2.new(1, -8, 0, 36)
+AllowBoxContainer.Position = UDim2.new(0, 4, 0, 4)
+AllowBoxContainer.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+AllowBoxContainer.BorderSizePixel = 0
+AllowBoxContainer.Parent = ConfigFrame
+
+local AllowBoxCorner = Instance.new("UICorner")
+AllowBoxCorner.CornerRadius = UDim.new(0, 4)
+AllowBoxCorner.Parent = AllowBoxContainer
+
+local AllowPFP = Instance.new("ImageLabel")
+AllowPFP.Name = "AllowPFP"
+AllowPFP.Size = UDim2.new(0, 28, 0, 28)
+AllowPFP.Position = UDim2.new(0, 4, 0, 4)
+AllowPFP.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+AllowPFP.Image = "rbxassetid://0"
+AllowPFP.Parent = AllowBoxContainer
+
+local AllowPFPCorner = Instance.new("UICorner")
+AllowPFPCorner.CornerRadius = UDim.new(1, 0)
+AllowPFPCorner.Parent = AllowPFP
+
+-- Smart Autocomplete Ghost Overlay
+local AllowSuggestText = Instance.new("TextLabel")
+AllowSuggestText.Name = "AllowSuggestText"
+AllowSuggestText.Size = UDim2.new(1, -84, 1, -8)
+AllowSuggestText.Position = UDim2.new(0, 36, 0, 4)
+AllowSuggestText.BackgroundTransparency = 1
+AllowSuggestText.Text = ""
+AllowSuggestText.TextColor3 = Color3.fromRGB(100, 100, 115)
+AllowSuggestText.TextSize = 8
+AllowSuggestText.Font = Enum.Font.GothamMedium
+AllowSuggestText.TextXAlignment = Enum.TextXAlignment.Left
+AllowSuggestText.Parent = AllowBoxContainer
+
+local AllowTextBox = Instance.new("TextBox")
+AllowTextBox.Name = "AllowTextBox"
+AllowTextBox.Size = UDim2.new(1, -84, 1, -8)
+AllowTextBox.Position = UDim2.new(0, 36, 0, 4)
+AllowTextBox.BackgroundTransparency = 1
+AllowTextBox.PlaceholderText = "Allow Name..."
+AllowTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+AllowTextBox.Text = ""
+AllowTextBox.TextColor3 = Color3.fromRGB(240, 240, 245)
+AllowTextBox.TextSize = 8
+AllowTextBox.Font = Enum.Font.GothamMedium
+AllowTextBox.TextXAlignment = Enum.TextXAlignment.Left
+AllowTextBox.ClearTextOnFocus = false
+AllowTextBox.Parent = AllowBoxContainer
+
+local ToggleAllowBtn = Instance.new("TextButton")
+ToggleAllowBtn.Name = "ToggleAllowBtn"
+ToggleAllowBtn.Size = UDim2.new(0, 42, 0, 24)
+ToggleAllowBtn.Position = UDim2.new(1, -46, 0, 6)
+ToggleAllowBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+ToggleAllowBtn.Text = "Allow"
+ToggleAllowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleAllowBtn.TextSize = 8
+ToggleAllowBtn.Font = Enum.Font.GothamBold
+ToggleAllowBtn.Parent = AllowBoxContainer
+
+local ToggleAllowCorner = Instance.new("UICorner")
+ToggleAllowCorner.CornerRadius = UDim.new(0, 4)
+ToggleAllowCorner.Parent = ToggleAllowBtn
+
+-- Hitbox Size Container
+local HitboxBoxContainer = Instance.new("Frame")
+HitboxBoxContainer.Name = "HitboxBoxContainer"
+HitboxBoxContainer.Size = UDim2.new(1, -8, 0, 18)
+HitboxBoxContainer.Position = UDim2.new(0, 4, 0, 44)
+HitboxBoxContainer.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+HitboxBoxContainer.BorderSizePixel = 0
+HitboxBoxContainer.Parent = ConfigFrame
+
+local HitboxBoxCorner = Instance.new("UICorner")
+HitboxBoxCorner.CornerRadius = UDim.new(0, 4)
+HitboxBoxCorner.Parent = HitboxBoxContainer
+
+local HitboxSizeTextBox = Instance.new("TextBox")
+HitboxSizeTextBox.Name = "HitboxSizeTextBox"
+HitboxSizeTextBox.Size = UDim2.new(1, -8, 1, 0)
+HitboxSizeTextBox.Position = UDim2.new(0, 4, 0, 0)
+HitboxSizeTextBox.BackgroundTransparency = 1
+HitboxSizeTextBox.PlaceholderText = "Hitbox Size (Current: 500)"
+HitboxSizeTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+HitboxSizeTextBox.Text = ""
+HitboxSizeTextBox.TextColor3 = Color3.fromRGB(240, 240, 245)
+HitboxSizeTextBox.TextSize = 8
+HitboxSizeTextBox.Font = Enum.Font.GothamMedium
+HitboxSizeTextBox.TextXAlignment = Enum.TextXAlignment.Left
+HitboxSizeTextBox.ClearTextOnFocus = false
+HitboxSizeTextBox.Parent = HitboxBoxContainer
+
+-- Stamp Speed Container
+local StampSpeedContainer = Instance.new("Frame")
+StampSpeedContainer.Name = "StampSpeedContainer"
+StampSpeedContainer.Size = UDim2.new(1, -8, 0, 18)
+StampSpeedContainer.Position = UDim2.new(0, 4, 0, 66)
+StampSpeedContainer.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+StampSpeedContainer.BorderSizePixel = 0
+StampSpeedContainer.Parent = ConfigFrame
+
+local StampSpeedCorner = Instance.new("UICorner")
+StampSpeedCorner.CornerRadius = UDim.new(0, 4)
+StampSpeedCorner.Parent = StampSpeedContainer
+
+local StampSpeedTextBox = Instance.new("TextBox")
+StampSpeedTextBox.Name = "StampSpeedTextBox"
+StampSpeedTextBox.Size = UDim2.new(1, -8, 1, 0)
+StampSpeedTextBox.Position = UDim2.new(0, 4, 0, 0)
+StampSpeedTextBox.BackgroundTransparency = 1
+StampSpeedTextBox.PlaceholderText = "Stamp Speed (Sec: 0.08)"
+StampSpeedTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+StampSpeedTextBox.Text = ""
+StampSpeedTextBox.TextColor3 = Color3.fromRGB(240, 240, 245)
+StampSpeedTextBox.TextSize = 8
+StampSpeedTextBox.Font = Enum.Font.GothamMedium
+StampSpeedTextBox.TextXAlignment = Enum.TextXAlignment.Left
+StampSpeedTextBox.ClearTextOnFocus = false
+StampSpeedTextBox.Parent = StampSpeedContainer
+
+-- Delete Speed Container
+local DeleteSpeedContainer = Instance.new("Frame")
+DeleteSpeedContainer.Name = "DeleteSpeedContainer"
+DeleteSpeedContainer.Size = UDim2.new(1, -8, 0, 18)
+DeleteSpeedContainer.Position = UDim2.new(0, 4, 0, 88)
+DeleteSpeedContainer.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+DeleteSpeedContainer.BorderSizePixel = 0
+DeleteSpeedContainer.Parent = ConfigFrame
+
+local DeleteSpeedCorner = Instance.new("UICorner")
+DeleteSpeedCorner.CornerRadius = UDim.new(0, 4)
+DeleteSpeedCorner.Parent = DeleteSpeedContainer
+
+local DeleteSpeedTextBox = Instance.new("TextBox")
+DeleteSpeedTextBox.Name = "DeleteSpeedTextBox"
+DeleteSpeedTextBox.Size = UDim2.new(1, -8, 1, 0)
+DeleteSpeedTextBox.Position = UDim2.new(0, 4, 0, 0)
+DeleteSpeedTextBox.BackgroundTransparency = 1
+DeleteSpeedTextBox.PlaceholderText = "Delete Delay (Sec: 0.08)"
+DeleteSpeedTextBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+DeleteSpeedTextBox.Text = ""
+DeleteSpeedTextBox.TextColor3 = Color3.fromRGB(240, 240, 245)
+DeleteSpeedTextBox.TextSize = 8
+DeleteSpeedTextBox.Font = Enum.Font.GothamMedium
+DeleteSpeedTextBox.TextXAlignment = Enum.TextXAlignment.Left
+DeleteSpeedTextBox.ClearTextOnFocus = false
+DeleteSpeedTextBox.Parent = DeleteSpeedContainer
+
+local NotificationContainer = Instance.new("Frame")
+NotificationContainer.Name = "NotificationContainer"
+NotificationContainer.Size = UDim2.new(0, 160, 0, 180)
+NotificationContainer.Position = UDim2.new(1, -170, 1, -190)
+NotificationContainer.BackgroundTransparency = 1
+NotificationContainer.Parent = ScreenGui
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = NotificationContainer
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 4)
+UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+
+local function sendNotification(titleText, bodyText)
+    local NotifFrame = Instance.new("Frame")
+    NotifFrame.Name = "NotifFrame"
+    NotifFrame.Size = UDim2.new(1, 0, 0, 38)
+    NotifFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    NotifFrame.BorderSizePixel = 0
+    NotifFrame.Parent = NotificationContainer
+
+    local NotifCorner = Instance.new("UICorner")
+    NotifCorner.CornerRadius = UDim.new(0, 6)
+    NotifCorner.Parent = NotifFrame
+
+    local NotifStroke = Instance.new("UIStroke")
+    NotifStroke.Color = Color3.fromRGB(240, 240, 245)
+    NotifStroke.Thickness = 1
+    NotifStroke.Transparency = 0.2
+    NotifStroke.Parent = NotifFrame
+
+    local LeftRedAccent = Instance.new("Frame")
+    LeftRedAccent.Size = UDim2.new(0, 3, 1, -8)
+    LeftRedAccent.Position = UDim2.new(0, 4, 0, 4)
+    LeftRedAccent.BackgroundColor3 = Color3.fromRGB(220, 20, 45)
+    LeftRedAccent.BorderSizePixel = 0
+    LeftRedAccent.Parent = NotifFrame
+
+    local AccentCorner = Instance.new("UICorner")
+    AccentCorner.CornerRadius = UDim.new(1, 0)
+    AccentCorner.Parent = LeftRedAccent
+
+    local NotifTitle = Instance.new("TextLabel")
+    NotifTitle.Size = UDim2.new(1, -16, 0, 14)
+    NotifTitle.Position = UDim2.new(0, 12, 0, 3)
+    NotifTitle.BackgroundTransparency = 1
+    NotifTitle.Text = titleText
+    NotifTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NotifTitle.TextSize = 9
+    NotifTitle.TextScaled = true
+    NotifTitle.Font = Enum.Font.GothamBold
+    NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
+    NotifTitle.Parent = NotifFrame
+
+    local NotifBody = Instance.new("TextLabel")
+    NotifBody.Size = UDim2.new(1, -16, 0, 14)
+    NotifBody.Position = UDim2.new(0, 12, 0, 18)
+    NotifBody.BackgroundTransparency = 1
+    NotifBody.Text = bodyText
+    NotifBody.TextColor3 = Color3.fromRGB(180, 180, 195)
+    NotifBody.TextSize = 8
+    NotifBody.TextScaled = true
+    NotifBody.Font = Enum.Font.GothamMedium
+    NotifBody.TextXAlignment = Enum.TextXAlignment.Left
+    NotifBody.Parent = NotifFrame
+
+    local NotifScale = Instance.new("UIScale")
+    NotifScale.Scale = 0
+    NotifScale.Parent = NotifFrame
+
+    TweenService:Create(NotifScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+
+    task.delay(2.5, function()
+        local exitTween = TweenService:Create(NotifScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0})
+        exitTween:Play()
+        exitTween.Completed:Connect(function()
+            NotifFrame:Destroy()
+        end)
+    end)
+end
+
+local function updateTargetVisuals(plr)
+    if plr then
+        selectedTargetPlayer = plr
+        dTgtPlayer = plr
+        UserTextBox.Text = plr.DisplayName
+        TargetPFP.Image = "rbxthumb://type=AvatarHeadShot&id=" .. plr.UserId .. "&w=150&h=150"
+    else
+        selectedTargetPlayer = nil
+        dTgtPlayer = nil
+        TargetPFP.Image = "rbxassetid://0"
+    end
+end
+
+local function getTargetPlayer(str, speaker)
+    if not str or str == "" then return nil end
+    str = string.lower(str)
+    if str == "me" then return speaker or LocalPlayer end
+    if str == "random" then
+        local otherPlayers = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if not isPlayerAllowedOrSelf(plr) and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                table.insert(otherPlayers, plr)
+            end
+        end
+        if #otherPlayers > 0 then return otherPlayers[math.random(1, #otherPlayers)] end
+        return nil
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if string.sub(string.lower(plr.Name), 1, #str) == str or string.sub(string.lower(plr.DisplayName), 1, #str) == str then
+            return plr
+        end
+    end
+    return nil
+end
+
+local currentSuggestedPlayer = nil
+
+local function updateAllowPFPVisuals(plr)
+    if plr then
+        selectedAllowPlayer = plr
+        AllowPFP.Image = "rbxthumb://type=AvatarHeadShot&id=" .. plr.UserId .. "&w=150&h=150"
+        if allowedPlayers[plr.UserId] then
+            ToggleAllowBtn.Text = "Unallow"
+            ToggleAllowBtn.BackgroundColor3 = Color3.fromRGB(220, 20, 45)
+        else
+            ToggleAllowBtn.Text = "Allow"
+            ToggleAllowBtn.BackgroundColor3 = Color3.fromRGB(38, 180, 75)
+        end
+    else
+        selectedAllowPlayer = nil
+        AllowPFP.Image = "rbxassetid://0"
+        ToggleAllowBtn.Text = "Allow"
+        ToggleAllowBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
+    end
+end
+
+UserTextBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed or UserTextBox.Text ~= "" then
+        local found = getTargetPlayer(UserTextBox.Text, LocalPlayer)
+        if found then
+            updateTargetVisuals(found)
+            sendNotification("TARGET", "Target set to: " .. found.DisplayName)
+        else
+            sendNotification("TARGET", "Player not found!")
+        end
+    end
+end)
+
+-- SMART AUTOCOMPLETE: Suggests preview match visually without touching typed text
+AllowTextBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local text = AllowTextBox.Text
+    if text ~= "" then
+        local found = getTargetPlayer(text, LocalPlayer)
+        if found then
+            currentSuggestedPlayer = found
+            AllowSuggestText.Text = found.DisplayName
+            updateAllowPFPVisuals(found)
+        else
+            currentSuggestedPlayer = nil
+            AllowSuggestText.Text = ""
+            updateAllowPFPVisuals(nil)
+        end
+    else
+        currentSuggestedPlayer = nil
+        AllowSuggestText.Text = ""
+        updateAllowPFPVisuals(nil)
+    end
+end)
+
+-- TAB OR ENTER TO CONFIRM AUTOCOMPLETE
+AllowTextBox.FocusLost:Connect(function(enterPressed)
+    if currentSuggestedPlayer then
+        AllowTextBox.Text = currentSuggestedPlayer.DisplayName
+        AllowSuggestText.Text = ""
+    end
+end)
+
+ToggleAllowBtn.MouseButton1Click:Connect(function()
+    local targetPlr = selectedAllowPlayer or currentSuggestedPlayer or getTargetPlayer(AllowTextBox.Text, LocalPlayer)
+    if targetPlr then
+        if allowedPlayers[targetPlr.UserId] then
+            allowedPlayers[targetPlr.UserId] = nil
+            playerStates[targetPlr.UserId] = nil
+            sendNotification("ALLOW", "Unallowed " .. targetPlr.DisplayName)
+        else
+            allowedPlayers[targetPlr.UserId] = true
+            sendNotification("ALLOW", "Allowed " .. targetPlr.DisplayName)
+        end
+        updateAllowPFPVisuals(targetPlr)
+    else
+        sendNotification("ALLOW", "No valid player specified!")
+    end
+end)
+
+HitboxSizeTextBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed or HitboxSizeTextBox.Text ~= "" then
+        local num = tonumber(HitboxSizeTextBox.Text)
+        if num and num > 0 then
+            lockRange = num
+            for _, ring in ipairs(activeLockRings) do
+                if ring and ring.Part then
+                    ring.Part.Size = Vector3.new(lockRange * 2, lockRange * 2, lockRange * 2)
+                end
+            end
+            sendNotification("HITBOX", "Hitbox size set to: " .. tostring(lockRange))
+            HitboxSizeTextBox.PlaceholderText = "Hitbox Size (Current: " .. tostring(lockRange) .. ")"
+            HitboxSizeTextBox.Text = ""
+        else
+            sendNotification("HITBOX", "Invalid size number!")
+        end
+    end
+end)
+
+-- LIVE STAMP SPEED LISTENER
+StampSpeedTextBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed or StampSpeedTextBox.Text ~= "" then
+        local num = tonumber(StampSpeedTextBox.Text)
+        if num and num >= 0 then
+            stampSpeed = num
+            sendNotification("SPEED", "Stamp Speed set to: " .. tostring(stampSpeed) .. "s")
+            StampSpeedTextBox.PlaceholderText = "Stamp Speed (Sec: " .. tostring(stampSpeed) .. ")"
+            StampSpeedTextBox.Text = ""
+        else
+            sendNotification("SPEED", "Invalid speed number!")
+        end
+    end
+end)
+
+-- LIVE DELETE SPEED LISTENER
+DeleteSpeedTextBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed or DeleteSpeedTextBox.Text ~= "" then
+        local num = tonumber(DeleteSpeedTextBox.Text)
+        if num and num >= 0 then
+            deleteSpeed = num
+            sendNotification("SPEED", "Delete Delay set to: " .. tostring(deleteSpeed) .. "s")
+            DeleteSpeedTextBox.PlaceholderText = "Delete Delay (Sec: " .. tostring(deleteSpeed) .. ")"
+            DeleteSpeedTextBox.Text = ""
+        else
+            sendNotification("SPEED", "Invalid speed number!")
+        end
+    end
+end)
+
+ClickTargetBtn.MouseButton1Click:Connect(function()
+    clickTargetActive = not clickTargetActive
+    ClickTargetBtn.BackgroundColor3 = clickTargetActive and Color3.fromRGB(220, 20, 45) or Color3.fromRGB(28, 28, 35)
+    if clickTargetActive then
+        sendNotification("TARGET", "Click on a player to target them!")
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed or not clickTargetActive then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local mouse = LocalPlayer:GetMouse()
+        local target = mouse.Target
+        if target then
+            local char = target:FindFirstAncestorOfClass("Model")
+            if char then
+                local plr = Players:GetPlayerFromCharacter(char)
+                if plr then
+                    updateTargetVisuals(plr)
+                    clickTargetActive = false
+                    ClickTargetBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+                    sendNotification("TARGET", "Target set to: " .. plr.DisplayName)
+                end
+            end
+        end
+    end
+end)
+
+---------------------------------------------------------
+-- TROLL / COMBAT SECTION
+---------------------------------------------------------
+local TrollScroll = Instance.new("ScrollingFrame")
+TrollScroll.Name = "TrollScroll"
+TrollScroll.Size = UDim2.new(1, -16, 0, 175)
+TrollScroll.Position = UDim2.new(0, 8, 0, 192)
+TrollScroll.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+TrollScroll.BorderSizePixel = 0
+TrollScroll.ScrollBarThickness = 2
+TrollScroll.ScrollBarImageColor3 = Color3.fromRGB(220, 20, 45)
+TrollScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+TrollScroll.Parent = MainFrame
+
+local TrollCorner = Instance.new("UICorner")
+TrollCorner.CornerRadius = UDim.new(0, 6)
+TrollCorner.Parent = TrollScroll
+
+local TrollList = Instance.new("UIListLayout")
+TrollList.Parent = TrollScroll
+TrollList.SortOrder = Enum.SortOrder.LayoutOrder
+TrollList.Padding = UDim.new(0, 3)
+
+local TrollPadding = Instance.new("UIPadding")
+TrollPadding.PaddingTop = UDim.new(0, 3)
+TrollPadding.PaddingBottom = UDim.new(0, 3)
+TrollPadding.PaddingLeft = UDim.new(0, 3)
+TrollPadding.PaddingRight = UDim.new(0, 3)
+TrollPadding.Parent = TrollScroll
+
+TrollList:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+    TrollScroll.CanvasSize = UDim2.new(0, 0, 0, TrollList.AbsoluteContentSize.Y + 6)
+end)
+
+local function createTrollButton(name, isToggle, callback)
+    local btn = Instance.new("TextButton")
+    btn.Name = name .. "Btn"
+    btn.Size = UDim2.new(1, -2, 0, 20)
+    btn.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+    btn.BorderSizePixel = 0
+    btn.Text = "  " .. name
+    btn.TextColor3 = Color3.fromRGB(220, 220, 230)
+    btn.TextSize = 8
+    btn.Font = Enum.Font.GothamBold
+    btn.TextXAlignment = Enum.TextXAlignment.Left
+    btn.Parent = TrollScroll
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 4)
+    btnCorner.Parent = btn
+
+    local state = false
+    local indicator = nil
+
+    if isToggle then
+        indicator = Instance.new("Frame")
+        indicator.Name = "Indicator"
+        indicator.Size = UDim2.new(0, 10, 0, 10)
+        indicator.Position = UDim2.new(1, -14, 0.5, -5)
+        indicator.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+        indicator.BorderSizePixel = 0
+        indicator.Parent = btn
+
+        local indCorner = Instance.new("UICorner")
+        indCorner.CornerRadius = UDim.new(1, 0)
+        indCorner.Parent = indicator
+    end
+
+    btn.MouseButton1Click:Connect(function()
+        if isToggle then
+            state = not state
+            indicator.BackgroundColor3 = state and Color3.fromRGB(220, 20, 45) or Color3.fromRGB(45, 45, 55)
+            callback(state)
+        else
+            TweenService:Create(btn, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(220, 20, 45)}):Play()
+            task.delay(0.15, function()
+                TweenService:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(26, 26, 32)}):Play()
+            end)
+            callback()
+        end
+    end)
+
+    return function(newState)
+        if isToggle and newState ~= nil then
+            state = newState
+            if indicator then
+                indicator.BackgroundColor3 = state and Color3.fromRGB(220, 20, 45) or Color3.fromRGB(45, 45, 55)
+            end
+        end
+    end
+end
+
+-- Toggle Floating Button
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Name = "ToggleAdmin"
+ToggleBtn.Size = UDim2.new(0, 32, 0, 32)
+ToggleBtn.Position = UDim2.new(0, 16, 1, -48)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+ToggleBtn.Text = ""
+ToggleBtn.AutoButtonColor = false
+ToggleBtn.Parent = ScreenGui
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(1, 0)
+ToggleCorner.Parent = ToggleBtn
+
+local ToggleCore = Instance.new("Frame")
+ToggleCore.Name = "Core"
+ToggleCore.Size = UDim2.new(0, 10, 0, 10)
+ToggleCore.Position = UDim2.new(0.5, -5, 0.5, -5)
+ToggleCore.BackgroundColor3 = Color3.fromRGB(230, 25, 50)
+ToggleCore.BorderSizePixel = 0
+ToggleCore.Parent = ToggleBtn
+
+local CoreCorner = Instance.new("UICorner")
+CoreCorner.CornerRadius = UDim.new(1, 0)
+CoreCorner.Parent = ToggleCore
+
+local pulseTime = 0
+RunService.Heartbeat:Connect(function(dt)
+    pulseTime = pulseTime + dt * 2
+    local alpha = (math.sin(pulseTime) + 1) / 2
+    local redGlow = Color3.fromRGB(170 + (70 * alpha), 15 + (20 * alpha), 30 + (20 * alpha))
+    AccentLine.BackgroundColor3 = redGlow
+    ToggleCore.BackgroundColor3 = redGlow
+end)
+
+local MainScale = Instance.new("UIScale")
+MainScale.Parent = MainFrame
+
+local isVisible = true
+local function toggleVisibility()
+    isVisible = not isVisible
+    if isVisible then
+        MainFrame.Visible = true
+        MainScale.Scale = 0.7
+        TweenService:Create(MainScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+    else
+        local tween = TweenService:Create(MainScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0})
+        tween:Play()
+        tween.Completed:Connect(function()
+            if MainScale.Scale == 0 then
+                MainFrame.Visible = false
+            end
+        end)
+    end
+end
+
+CloseBtn.MouseButton1Click:Connect(toggleVisibility)
+ToggleBtn.MouseButton1Click:Connect(toggleVisibility)
+
+-------------------------------
+-- ENGINE LOGIC
+-------------------------------
+local cachedPlate = nil
+local function getMyPlate()
+    if cachedPlate and cachedPlate.Parent then return cachedPlate end
+    local platesFolder = Workspace:FindFirstChild("Plates")
+    if not platesFolder then return nil end
+    local myName = string.lower(LocalPlayer.Name)
+    local myUserId = tostring(LocalPlayer.UserId)
+    
+    for _, model in ipairs(platesFolder:GetChildren()) do
+        local ownerVal = model:FindFirstChild("Owner")
+        if ownerVal then
+            local strVal = string.lower(tostring(ownerVal.Value))
+            if string.find(strVal, myName, 1, true) or string.find(strVal, myUserId, 1, true) then
+                cachedPlate = model:FindFirstChild("Plate") or model
+                return cachedPlate
+            end
+        end
+    end
+    return nil
+end
+
+-- HIGH-FREQUENCY DELETE REMOVAL ENGINE
+local function clearActiveParts()
+    local myPlate = getMyPlate()
+    if not myPlate then return end
+    local plotFolder = myPlate.Parent
+    if not plotFolder then return end
+    
+    local activeParts = plotFolder:FindFirstChild("ActiveParts")
+    if deleteRemote then
+        if activeParts then
+            for _, asset in ipairs(activeParts:GetChildren()) do
+                task.spawn(function()
+                    pcall(function() deleteRemote:InvokeServer(asset) end)
+                    pcall(function() deleteRemote:InvokeServer(asset) end)
+                end)
+            end
+        end
+        task.spawn(function()
+            pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end)
+            pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end)
+            pcall(function() deleteRemote:InvokeServer(Instance.new("Folder", nil)) end)
+        end)
+    end
+end
+
+local function triggerTripleAbyss(tgt)
+    if isPlayerAllowed(tgt) then return end
+    local pl = getMyPlate()
+    if not pl or not tgt or not tgt.Character then return end
+    local hrp = tgt.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    
+    local cf = pl.CFrame * CFrame.new(0, -1000, 0)
+    if stampRemote and deleteRemote then
+        task.spawn(clearActiveParts)
+
+        pcall(function() stampRemote:InvokeServer(56449778, cf, "{" .. HttpService:GenerateGUID(false) .. "}", {hrp}, 1) end)
+        task.spawn(function() pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end) end)
+        
+        task.wait(deleteSpeed)
+        pcall(function() stampRemote:InvokeServer(56449778, cf, "{" .. HttpService:GenerateGUID(false) .. "}", {hrp}, 1) end)
+        task.spawn(function() pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end) end)
+
+        task.wait(deleteSpeed)
+        pcall(function() stampRemote:InvokeServer(56449778, cf, "{" .. HttpService:GenerateGUID(false) .. "}", {hrp}, 1) end)
+
+        for i = 1, 4 do
+            task.spawn(function()
+                pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end)
+            end)
+        end
+    end
+end
+
+local function iLock(tgt, f, part, pos)
+    if isPlayerAllowed(tgt) then return end
+    local ap = f:FindFirstChild("ActiveParts")
+    local tp = tgt.Character and tgt.Character:FindFirstChild(part)
+    if not tp then return end
+
+    if not ap then
+        ap = Instance.new("Folder")
+        ap.Name = "ActiveParts"
+        ap.Parent = f
+    end
+
+    local c
+    c = ap.DescendantAdded:Connect(function(d)
+        if d.Name == "Spikes" and d:IsA("BasePart") and not d:FindFirstChild("_u") then
+            Instance.new("BoolValue", d).Name = "_u"
+            c:Disconnect()
+            task.wait(deleteSpeed)
+            pcall(function()
+                if stampRemote then
+                    stampRemote:InvokeServer(56451715, pos, "{" .. HttpService:GenerateGUID(false) .. "}", {tp, d}, 0)
+                end
+            end)
+            if deleteRemote then
+                task.spawn(function()
+                    pcall(function() deleteRemote:InvokeServer(d) end)
+                    pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end)
+                end)
+            end
+        end
+    end)
+
+    local pp = f:FindFirstChild("Plate")
+    if pp then
+        pcall(function()
+            if stampRemote then
+                stampRemote:InvokeServer(41324904, pp.CFrame, "{" .. HttpService:GenerateGUID(false) .. "}", {pp}, 0)
+            end
+        end)
+    end
+
+    task.delay(0.6, function()
+        if c then c:Disconnect() end
+    end)
+end
+
+local function disform(tgt, overrideMode)
+    if isPlayerAllowed(tgt) or disForming then return end
+    disForming = true
+
+    local myPlate = getMyPlate()
+    local f = myPlate and myPlate.Parent
+    if not f or not tgt or not tgt.Character or not tgt.Character:FindFirstChild("HumanoidRootPart") then
+        disForming = false
+        return
+    end
+
+    local pp = f:FindFirstChild("Plate") or f
+    if not pp then
+        disForming = false
+        return
+    end
+
+    local vCF = CFrame.new(pp.Position.X, -1000, pp.Position.Z)
+    local m = overrideMode or dModes[dIdx]
+
+    if m == "all parts" then
+        for _, limb in ipairs({"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg"}) do
+            task.spawn(iLock, tgt, f, limb, vCF)
+            task.wait(stampSpeed)
+        end
+    else
+        iLock(tgt, f, m, vCF)
+    end
+
+    task.spawn(clearActiveParts)
+    task.wait(dCool)
+    disForming = false
+end
+
+local function vStamp(tgt)
+    if lockingState or not tgt then return end
+    lockingState = true
+    local pl = getMyPlate()
+    if pl and stampRemote and deleteRemote then
+        local cf = pl.CFrame * CFrame.new(0, -100, 0)
+        for _, id in ipairs(stampVA) do
+            pcall(function()
+                stampRemote:InvokeServer(id, cf, "{" .. HttpService:GenerateGUID(false) .. "}", {tgt}, 1)
+            end)
+            task.spawn(function()
+                pcall(function() deleteRemote:InvokeServer(Instance.new("Model", nil)) end)
+                pcall(function() deleteRemote:InvokeServer(Instance.new("Folder", nil)) end)
+            end)
+            task.wait(stampSpeed)
+        end
+    end
+    task.spawn(clearActiveParts)
+    task.wait(0.95)
+    lockingState = false
+end
+
+local function getActiveLockSources()
+    local sources = {}
+    if toolLockOn or bodyLockOn or tripleAbyssActive then
+        if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            table.insert(sources, {
+                Player = LocalPlayer, 
+                Root = LocalPlayer.Character.HumanoidRootPart, 
+                Color = Color3.fromRGB(220, 20, 45),
+                State = {bodyLockOn = bodyLockOn, toolLockOn = toolLockOn, tripleAbyssActive = tripleAbyssActive, tripleAbyssTarget = tripleAbyssTarget}
+            })
+        end
+    end
+
+    for userId, isAllowed in pairs(allowedPlayers) do
+        if isAllowed then
+            local plr = Players:GetPlayerByUserId(userId)
+            if plr and plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                table.insert(sources, {
+                    Player = plr, 
+                    Root = plr.Character.HumanoidRootPart, 
+                    Color = Color3.fromRGB(45, 220, 80),
+                    State = {bodyLockOn = bodyLockOn, toolLockOn = toolLockOn, tripleAbyssActive = tripleAbyssActive, tripleAbyssTarget = tripleAbyssTarget}
+                })
+            end
+        end
+    end
+    return sources
+end
+
+-- FIXED HITBOX & LOCK HEARTBEAT LOOP
+RunService.Heartbeat:Connect(function()
+    local now = tick()
+    local lockSources = getActiveLockSources()
+
+    for i, source in ipairs(lockSources) do
+        local ringData = activeLockRings[i]
+        if not ringData then
+            local p = createLockRing(source.Color)
+            ringData = {Part = p, Color = source.Color}
+            activeLockRings[i] = ringData
+        end
+        if ringData.Color ~= source.Color then
+            ringData.Part.Color = source.Color
+            ringData.Color = source.Color
+        end
+        ringData.Part.CFrame = source.Root.CFrame
+        ringData.Part.Transparency = 0.88
+    end
+
+    for i = #lockSources + 1, #activeLockRings do
+        if activeLockRings[i] and activeLockRings[i].Part then
+            activeLockRings[i].Part.Transparency = 1
+        end
+    end
+
+    local function runTargetsForPlayer(targetPlr)
+        if not targetPlr or (targetPlr ~= LocalPlayer and isPlayerAllowed(targetPlr)) or not targetPlr.Character then return end
+        local targetRoot = targetPlr.Character:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then return end
+
+        for _, source in ipairs(lockSources) do
+            local sourceRoot = source.Root
+            local st = source.State
+            local inRange = (sourceRoot.Position - targetRoot.Position).Magnitude <= lockRange
+
+            if inRange then
+                if st.toolLockOn then
+                    local t = targetPlr.Character:FindFirstChildWhichIsA("Tool")
+                    if t and toolSpy[t.Name] then
+                        vStamp(t:FindFirstChild("Handle") or t:FindFirstChildWhichIsA("BasePart"))
+                    end
+                end
+
+                if st.bodyLockOn then
+                    local targetPart = targetPlr.Character:FindFirstChild(currentBodyPart)
+                    if targetPart then
+                        vStamp(targetPart)
+                    end
+                end
+
+                if st.tripleAbyssActive then
+                    if now - lastAbyssTime >= ABYSS_COOLDOWN then
+                        lastAbyssTime = now
+                        task.spawn(triggerTripleAbyss, targetPlr)
+                    end
+                end
+            end
+        end
+    end
+
+    if disOn and now - dLast >= dCool then
+        if effectAllPlayers then
+            for _, plr in ipairs(Players:GetPlayers()) do
+                if not isPlayerAllowed(plr) then
+                    dLast = now
+                    task.spawn(disform, plr, nil)
+                end
+            end
+        elseif dTgtPlayer and (dTgtPlayer == LocalPlayer or not isPlayerAllowed(dTgtPlayer)) then
+            dLast = now
+            task.spawn(disform, dTgtPlayer, nil)
+        end
+    end
+
+    if effectAllPlayers then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            runTargetsForPlayer(plr)
+        end
+    elseif selectedTargetPlayer then
+        runTargetsForPlayer(selectedTargetPlayer)
+    end
+end)
+
+local toggleSetters = {}
+
+local function stopAllCommands()
+    bodyLockOn = false
+    toolLockOn = false
+    disOn = false
+    tripleAbyssActive = false
+    tripleAbyssTarget = nil
+
+    for name, setFunc in pairs(toggleSetters) do
+        setFunc(false)
+    end
+
+    for _, st in pairs(playerStates) do
+        st.bodyLockOn = false
+        st.toolLockOn = false
+        st.tripleAbyssActive = false
+        st.tripleAbyssTarget = nil
+    end
+
+    clearActiveParts()
+    sendNotification("BEAT IT", "Stopped active commands & cleared ActiveParts")
+end
+
+---------------------------------------------------------
+-- POPULATE CLEAN UI TOGGLES
+---------------------------------------------------------
+toggleSetters["Effect ALL Players (*all*)"] = createTrollButton("Effect ALL Players (*all*)", true, function(state)
+    effectAllPlayers = state
+    if not state then clearActiveParts() end
+    sendNotification("BEAT IT", effectAllPlayers and "Affecting ALL Players" or "Affecting Selected Target")
+end)
+
+toggleSetters["Body Lock"] = createTrollButton("Body Lock", true, function(state)
+    bodyLockOn = state
+    if not state then clearActiveParts() end
+    sendNotification("BEAT IT", "Body Lock: " .. (state and "ON" or "OFF"))
+end)
+
+toggleSetters["Tool Lock"] = createTrollButton("Tool Lock", true, function(state)
+    toolLockOn = state
+    if not state then clearActiveParts() end
+    sendNotification("BEAT IT", "Tool Lock: " .. (state and "ON" or "OFF"))
+end)
+
+toggleSetters["Disformation Loop"] = createTrollButton("Disformation Loop", true, function(state)
+    disOn = state
+    if not state then clearActiveParts() end
+    sendNotification("BEAT IT", "Disformation Loop: " .. (state and "ON" or "OFF"))
+end)
+
+toggleSetters["Triple Abyss Target"] = createTrollButton("Triple Abyss Target", true, function(state)
+    if state then
+        if selectedTargetPlayer and (selectedTargetPlayer == LocalPlayer or not isPlayerAllowed(selectedTargetPlayer)) then
+            tripleAbyssTarget = selectedTargetPlayer
+            tripleAbyssActive = true
+            sendNotification("BEAT IT", "Triple Abyss on " .. selectedTargetPlayer.DisplayName)
+        else
+            tripleAbyssTarget = nil
+            tripleAbyssActive = true
+            sendNotification("BEAT IT", "Hitbox Triple Abyss Active")
+        end
+    else
+        tripleAbyssActive = false
+        tripleAbyssTarget = nil
+        clearActiveParts()
+        sendNotification("BEAT IT", "Triple Abyss Disabled")
+    end
+end)
+
+-- Reset handling
+LocalPlayer.CharacterAdded:Connect(function()
+    stopAllCommands()
+end)
+
+sendNotification("BEAT IT", "Loaded successfully")
