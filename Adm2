@@ -1,0 +1,1312 @@
+-- Beat It Admin (Green Edition - Target Trolls & Allowed Player Engine)
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+-- Remotes & Assets Configuration
+local stampRemote = ReplicatedStorage:WaitForChild("Remotes", 5) and ReplicatedStorage.Remotes:WaitForChild("StampAsset", 5)
+local deleteRemote = ReplicatedStorage:WaitForChild("Remotes", 5) and ReplicatedStorage.Remotes:WaitForChild("DeleteAsset", 5)
+
+local GUID = "{99ab22df-ca29-4143-a2fd-0a1b79db78c2}"
+local ASSET = 41324945
+local SPEED_ASSET = 56451715
+local SPEED_GUID = "{3ae31e60-5cd0-4d80-96b6-a1dd894ece8a}"
+
+local cachedModel = Instance.new("Model")
+local dummyHRP = Instance.new("Part", cachedModel)
+dummyHRP.Name = "HumanoidRootPart"
+
+-- Core Settings & Live Variables
+local currentTargetPlayer = nil
+local allowedPlayer = nil
+local currentActiveTrollMode = nil
+local currentActiveParam = nil
+local effectAllPlayers = false
+local clearBugsActive = false
+
+-- Hardcoded Settings
+local liveStampHeight = -999
+local liveStampSpeed = 29
+local hitboxRadius = 12 -- Radius for allowed player's aura hitbox
+
+-- Visual Hitbox Part Setup
+local visualHitboxPart = Instance.new("Part")
+visualHitboxPart.Name = "AllowedPlayer_VisualHitbox"
+visualHitboxPart.Shape = Enum.PartType.Ball
+visualHitboxPart.Material = Enum.Material.ForceField
+visualHitboxPart.Color = Color3.fromRGB(60, 220, 120)
+visualHitboxPart.Transparency = 0.6
+visualHitboxPart.CanCollide = false
+visualHitboxPart.Massless = true
+visualHitboxPart.Anchored = true
+visualHitboxPart.CastShadow = false
+
+local visualHitboxSelection = Instance.new("SelectionBox")
+visualHitboxSelection.Color3 = Color3.fromRGB(60, 220, 120)
+visualHitboxSelection.LineThickness = 0.05
+visualHitboxSelection.Adornee = visualHitboxPart
+visualHitboxSelection.Parent = visualHitboxPart
+
+-- Movement Boost & Custom Mode Tracking
+local activeModes = {} -- [UserId] = mode string
+local speedBoosts = {}
+local jpBoosts = {}
+local flyBoosts = {}
+
+-- Block Caching System
+local cachedBlocksMap = {}
+local lastBlockScan = 0
+
+-- UI Container Setup
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "BeatItAdmin_TargetTrolls"
+ScreenGui.ResetOnSpawn = false
+
+if gethui then
+    ScreenGui.Parent = gethui()
+elseif syn and syn.protect_gui then
+    syn.protect_gui(ScreenGui)
+    ScreenGui.Parent = CoreGui
+else
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+-- Main Window Frame
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 230, 0, 420)
+MainFrame.Position = UDim2.new(0.5, -115, 0.5, -210)
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 16, 14)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.ClipsDescendants = false
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 10)
+MainCorner.Parent = MainFrame
+
+-- Outer Border
+local InnerStroke = Instance.new("UIStroke")
+InnerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+InnerStroke.Color = Color3.fromRGB(220, 245, 225)
+InnerStroke.Thickness = 1.2
+InnerStroke.Transparency = 0.1
+InnerStroke.Parent = MainFrame
+
+-- Green Accent Glow Line
+local AccentLine = Instance.new("Frame")
+AccentLine.Name = "AccentLine"
+AccentLine.Size = UDim2.new(1, -20, 0, 2)
+AccentLine.Position = UDim2.new(0, 10, 0, 28)
+AccentLine.BackgroundColor3 = Color3.fromRGB(60, 220, 120)
+AccentLine.BorderSizePixel = 0
+AccentLine.Parent = MainFrame
+
+local AccentCorner = Instance.new("UICorner")
+AccentCorner.CornerRadius = UDim.new(1, 0)
+AccentCorner.Parent = AccentLine
+
+-- Title Label
+local Title = Instance.new("TextLabel")
+Title.Name = "Title"
+Title.Size = UDim2.new(1, -30, 0, 24)
+Title.Position = UDim2.new(0, 10, 0, 2)
+Title.BackgroundTransparency = 1
+Title.Text = "BEAT IT [TARGET TROLLS]"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.TextSize = 12
+Title.TextScaled = true
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = MainFrame
+
+local TitleSizeConstraint = Instance.new("UITextSizeConstraint")
+TitleSizeConstraint.MaxTextSize = 12
+TitleSizeConstraint.MinTextSize = 8
+TitleSizeConstraint.Parent = Title
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Name = "CloseButton"
+CloseBtn.Size = UDim2.new(0, 18, 0, 18)
+CloseBtn.Position = UDim2.new(1, -22, 0, 5)
+CloseBtn.BackgroundTransparency = 1
+CloseBtn.Text = "×"
+CloseBtn.TextColor3 = Color3.fromRGB(180, 200, 185)
+CloseBtn.TextSize = 14
+CloseBtn.TextScaled = true
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = MainFrame
+
+-- TARGET TROLLS PAGE
+local TargetPage = Instance.new("Frame")
+TargetPage.Name = "TargetPage"
+TargetPage.Size = UDim2.new(1, -20, 0, 285)
+TargetPage.Position = UDim2.new(0, 10, 0, 35)
+TargetPage.BackgroundColor3 = Color3.fromRGB(18, 24, 20)
+TargetPage.BorderSizePixel = 0
+TargetPage.Visible = true
+TargetPage.Parent = MainFrame
+
+local TargetCorner = Instance.new("UICorner")
+TargetCorner.CornerRadius = UDim.new(0, 6)
+TargetCorner.Parent = TargetPage
+
+local TargetStroke = Instance.new("UIStroke")
+TargetStroke.Color = Color3.fromRGB(35, 48, 40)
+TargetStroke.Thickness = 1
+TargetStroke.Parent = TargetPage
+
+-- Target Player Profile Card
+local TargetProfileCard = Instance.new("Frame")
+TargetProfileCard.Name = "TargetProfileCard"
+TargetProfileCard.Size = UDim2.new(1, -10, 0, 42)
+TargetProfileCard.Position = UDim2.new(0, 5, 0, 5)
+TargetProfileCard.BackgroundColor3 = Color3.fromRGB(12, 16, 14)
+TargetProfileCard.Parent = TargetPage
+
+local ProfileCorner = Instance.new("UICorner")
+ProfileCorner.CornerRadius = UDim.new(0, 5)
+ProfileCorner.Parent = TargetProfileCard
+
+local TargetAvatarImg = Instance.new("ImageLabel")
+TargetAvatarImg.Name = "AvatarImg"
+TargetAvatarImg.Size = UDim2.new(0, 32, 0, 32)
+TargetAvatarImg.Position = UDim2.new(0, 5, 0.5, -16)
+TargetAvatarImg.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+TargetAvatarImg.Image = "rbxassetid://0"
+TargetAvatarImg.Parent = TargetProfileCard
+
+local AvatarCorner = Instance.new("UICorner")
+AvatarCorner.CornerRadius = UDim.new(1, 0)
+AvatarCorner.Parent = TargetAvatarImg
+
+local TargetNameLabel = Instance.new("TextLabel")
+TargetNameLabel.Name = "TargetName"
+TargetNameLabel.Size = UDim2.new(1, -45, 0, 15)
+TargetNameLabel.Position = UDim2.new(0, 42, 0, 5)
+TargetNameLabel.BackgroundTransparency = 1
+TargetNameLabel.Text = "Target: None"
+TargetNameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TargetNameLabel.Font = Enum.Font.GothamBold
+TargetNameLabel.TextSize = 9
+TargetNameLabel.TextXAlignment = Enum.TextXAlignment.Left
+TargetNameLabel.Parent = TargetProfileCard
+
+local TargetSubLabel = Instance.new("TextLabel")
+TargetSubLabel.Name = "TargetSub"
+TargetSubLabel.Size = UDim2.new(1, -45, 0, 14)
+TargetSubLabel.Position = UDim2.new(0, 42, 0, 20)
+TargetSubLabel.BackgroundTransparency = 1
+TargetSubLabel.Text = "Type user below or use Tool"
+TargetSubLabel.TextColor3 = Color3.fromRGB(140, 165, 145)
+TargetSubLabel.Font = Enum.Font.GothamMedium
+TargetSubLabel.TextSize = 8
+TargetSubLabel.TextXAlignment = Enum.TextXAlignment.Left
+TargetSubLabel.Parent = TargetProfileCard
+
+-- TARGET SELECTION CONTAINER
+local UserSelectContainer = Instance.new("Frame")
+UserSelectContainer.Name = "UserSelectContainer"
+UserSelectContainer.Size = UDim2.new(1, -10, 0, 24)
+UserSelectContainer.Position = UDim2.new(0, 5, 0, 50)
+UserSelectContainer.BackgroundColor3 = Color3.fromRGB(12, 16, 14)
+UserSelectContainer.Parent = TargetPage
+
+local UserSelectCorner = Instance.new("UICorner")
+UserSelectCorner.CornerRadius = UDim.new(0, 4)
+UserSelectCorner.Parent = UserSelectContainer
+
+local UserInputBox = Instance.new("TextBox")
+UserInputBox.Name = "UserInput"
+UserInputBox.Size = UDim2.new(0.65, -4, 1, -4)
+UserInputBox.Position = UDim2.new(0, 2, 0, 2)
+UserInputBox.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+UserInputBox.Text = ""
+UserInputBox.PlaceholderText = "Target Username..."
+UserInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+UserInputBox.PlaceholderColor3 = Color3.fromRGB(120, 145, 125)
+UserInputBox.Font = Enum.Font.GothamMedium
+UserInputBox.TextSize = 8
+UserInputBox.ClearTextOnFocus = false
+UserInputBox.Parent = UserSelectContainer
+
+local UserInputCorner = Instance.new("UICorner")
+UserInputCorner.CornerRadius = UDim.new(0, 3)
+UserInputCorner.Parent = UserInputBox
+
+local UserApplyBtn = Instance.new("TextButton")
+UserApplyBtn.Name = "UserApplyBtn"
+UserApplyBtn.Size = UDim2.new(0.35, -4, 1, -4)
+UserApplyBtn.Position = UDim2.new(0.65, 2, 0, 2)
+UserApplyBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 65)
+UserApplyBtn.Text = "Select"
+UserApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+UserApplyBtn.Font = Enum.Font.GothamBold
+UserApplyBtn.TextSize = 8
+UserApplyBtn.Parent = UserSelectContainer
+
+local UserBtnCorner = Instance.new("UICorner")
+UserBtnCorner.CornerRadius = UDim.new(0, 3)
+UserBtnCorner.Parent = UserApplyBtn
+
+-- ALLOW PLAYER CONTAINER (With Allow + Unallow Buttons)
+local AllowUserContainer = Instance.new("Frame")
+AllowUserContainer.Name = "AllowUserContainer"
+AllowUserContainer.Size = UDim2.new(1, -10, 0, 24)
+AllowUserContainer.Position = UDim2.new(0, 5, 0, 78)
+AllowUserContainer.BackgroundColor3 = Color3.fromRGB(12, 16, 14)
+AllowUserContainer.Parent = TargetPage
+
+local AllowUserCorner = Instance.new("UICorner")
+AllowUserCorner.CornerRadius = UDim.new(0, 4)
+AllowUserCorner.Parent = AllowUserContainer
+
+local AllowInputBox = Instance.new("TextBox")
+AllowInputBox.Name = "AllowInput"
+AllowInputBox.Size = UDim2.new(0.50, -4, 1, -4)
+AllowInputBox.Position = UDim2.new(0, 2, 0, 2)
+AllowInputBox.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+AllowInputBox.Text = ""
+AllowInputBox.PlaceholderText = "Allowed Username..."
+AllowInputBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+AllowInputBox.PlaceholderColor3 = Color3.fromRGB(120, 145, 125)
+AllowInputBox.Font = Enum.Font.GothamMedium
+AllowInputBox.TextSize = 8
+AllowInputBox.ClearTextOnFocus = false
+AllowInputBox.Parent = AllowUserContainer
+
+local AllowInputCorner = Instance.new("UICorner")
+AllowInputCorner.CornerRadius = UDim.new(0, 3)
+AllowInputCorner.Parent = AllowInputBox
+
+local AllowApplyBtn = Instance.new("TextButton")
+AllowApplyBtn.Name = "AllowApplyBtn"
+AllowApplyBtn.Size = UDim2.new(0.25, -3, 1, -4)
+AllowApplyBtn.Position = UDim2.new(0.50, 2, 0, 2)
+AllowApplyBtn.BackgroundColor3 = Color3.fromRGB(35, 100, 140)
+AllowApplyBtn.Text = "Allow"
+AllowApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AllowApplyBtn.Font = Enum.Font.GothamBold
+AllowApplyBtn.TextSize = 8
+AllowApplyBtn.Parent = AllowUserContainer
+
+local AllowBtnCorner = Instance.new("UICorner")
+AllowBtnCorner.CornerRadius = UDim.new(0, 3)
+AllowBtnCorner.Parent = AllowApplyBtn
+
+local UnallowBtn = Instance.new("TextButton")
+UnallowBtn.Name = "UnallowBtn"
+UnallowBtn.Size = UDim2.new(0.25, -3, 1, -4)
+UnallowBtn.Position = UDim2.new(0.75, 1, 0, 2)
+UnallowBtn.BackgroundColor3 = Color3.fromRGB(150, 45, 45)
+UnallowBtn.Text = "Unallow"
+UnallowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+UnallowBtn.Font = Enum.Font.GothamBold
+UnallowBtn.TextSize = 8
+UnallowBtn.Parent = AllowUserContainer
+
+local UnallowBtnCorner = Instance.new("UICorner")
+UnallowBtnCorner.CornerRadius = UDim.new(0, 3)
+UnallowBtnCorner.Parent = UnallowBtn
+
+-- Scroll Frame For Target Toggles
+local TrollScroll = Instance.new("ScrollingFrame")
+TrollScroll.Name = "TrollScroll"
+TrollScroll.Size = UDim2.new(1, -10, 0, 173)
+TrollScroll.Position = UDim2.new(0, 5, 0, 106)
+TrollScroll.BackgroundTransparency = 1
+TrollScroll.CanvasSize = UDim2.new(0, 0, 0, 500)
+TrollScroll.ScrollBarThickness = 3
+TrollScroll.ScrollBarImageColor3 = Color3.fromRGB(60, 220, 120)
+TrollScroll.Parent = TargetPage
+
+local TrollLayout = Instance.new("UIListLayout")
+TrollLayout.Parent = TrollScroll
+TrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TrollLayout.Padding = UDim.new(0, 4)
+
+local function sendNotification(titleText, bodyText)
+    local NotificationContainer = ScreenGui:FindFirstChild("NotificationContainer")
+    if not NotificationContainer then return end
+
+    local NotifFrame = Instance.new("Frame")
+    NotifFrame.Name = "NotifFrame"
+    NotifFrame.Size = UDim2.new(1, 0, 0, 42)
+    NotifFrame.BackgroundColor3 = Color3.fromRGB(14, 18, 16)
+    NotifFrame.BorderSizePixel = 0
+    NotifFrame.Parent = NotificationContainer
+
+    local NotifCorner = Instance.new("UICorner")
+    NotifCorner.CornerRadius = UDim.new(0, 6)
+    NotifCorner.Parent = NotifFrame
+
+    local NotifStroke = Instance.new("UIStroke")
+    NotifStroke.Color = Color3.fromRGB(220, 245, 225)
+    NotifStroke.Thickness = 1
+    NotifStroke.Transparency = 0.2
+    NotifStroke.Parent = NotifFrame
+
+    local LeftGreenAccent = Instance.new("Frame")
+    LeftGreenAccent.Size = UDim2.new(0, 3, 1, -8)
+    LeftGreenAccent.Position = UDim2.new(0, 4, 0, 4)
+    LeftGreenAccent.BackgroundColor3 = Color3.fromRGB(60, 220, 120)
+    LeftGreenAccent.BorderSizePixel = 0
+    LeftGreenAccent.Parent = NotifFrame
+
+    local AccentCorner = Instance.new("UICorner")
+    AccentCorner.CornerRadius = UDim.new(1, 0)
+    AccentCorner.Parent = LeftGreenAccent
+
+    local NotifTitle = Instance.new("TextLabel")
+    NotifTitle.Size = UDim2.new(1, -16, 0, 16)
+    NotifTitle.Position = UDim2.new(0, 12, 0, 4)
+    NotifTitle.BackgroundTransparency = 1
+    NotifTitle.Text = titleText
+    NotifTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NotifTitle.TextSize = 10
+    NotifTitle.TextScaled = true
+    NotifTitle.Font = Enum.Font.GothamBold
+    NotifTitle.TextXAlignment = Enum.TextXAlignment.Left
+    NotifTitle.Parent = NotifFrame
+
+    local NotifTitleConstraint = Instance.new("UITextSizeConstraint")
+    NotifTitleConstraint.MaxTextSize = 10
+    NotifTitleConstraint.MinTextSize = 6
+    NotifTitleConstraint.Parent = NotifTitle
+
+    local NotifBody = Instance.new("TextLabel")
+    NotifBody.Size = UDim2.new(1, -16, 0, 16)
+    NotifBody.Position = UDim2.new(0, 12, 0, 20)
+    NotifBody.BackgroundTransparency = 1
+    NotifBody.Text = bodyText
+    NotifBody.TextColor3 = Color3.fromRGB(180, 205, 185)
+    NotifBody.TextSize = 9
+    NotifBody.TextScaled = true
+    NotifBody.Font = Enum.Font.GothamMedium
+    NotifBody.TextXAlignment = Enum.TextXAlignment.Left
+    NotifBody.Parent = NotifFrame
+
+    local NotifBodyConstraint = Instance.new("UITextSizeConstraint")
+    NotifBodyConstraint.MaxTextSize = 9
+    NotifBodyConstraint.MinTextSize = 6
+    NotifBodyConstraint.Parent = NotifBody
+
+    local NotifScale = Instance.new("UIScale")
+    NotifScale.Scale = 0
+    NotifScale.Parent = NotifFrame
+
+    TweenService:Create(NotifScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+
+    task.delay(2.5, function()
+        local exitTween = TweenService:Create(NotifScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0})
+        exitTween:Play()
+        exitTween.Completed:Connect(function()
+            NotifFrame:Destroy()
+        end)
+    end)
+end
+
+local function applyModeToTargets(mode, customVal)
+    currentActiveTrollMode = mode
+    currentActiveParam = customVal
+
+    if effectAllPlayers then
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= allowedPlayer then
+                activeModes[p.UserId] = mode
+                if mode == "speed" then speedBoosts[p.UserId] = customVal
+                elseif mode == "jp" then jpBoosts[p.UserId] = customVal
+                elseif mode == "fly" then flyBoosts[p.UserId] = customVal end
+            end
+        end
+    elseif currentTargetPlayer then
+        activeModes[currentTargetPlayer.UserId] = mode
+        if mode == "speed" then speedBoosts[currentTargetPlayer.UserId] = customVal
+        elseif mode == "jp" then jpBoosts[currentTargetPlayer.UserId] = customVal
+        elseif mode == "fly" then flyBoosts[currentTargetPlayer.UserId] = customVal end
+    end
+end
+
+local function findTargetPlayer(nameQuery)
+    nameQuery = string.lower(nameQuery)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if string.find(string.lower(p.Name), nameQuery, 1, true) or string.find(string.lower(p.DisplayName), nameQuery, 1, true) then
+            return p
+        end
+    end
+    return nil
+end
+
+local function setTargetPlayer(player)
+    if not player then return end
+    currentTargetPlayer = player
+    TargetNameLabel.Text = "Target: " .. player.DisplayName
+    TargetSubLabel.Text = "@" .. player.Name
+    
+    local content, isLoaded = Players:GetUserThumbnailAsync(
+        player.UserId,
+        Enum.ThumbnailType.HeadShot,
+        Enum.ThumbnailSize.Size100x100
+    )
+    if isLoaded then
+        TargetAvatarImg.Image = content
+    end
+    sendNotification("TARGET SELECT", "Target set: " .. player.Name)
+end
+
+local function setAllowedPlayer(player)
+    if not player then return end
+    allowedPlayer = player
+    TargetNameLabel.Text = "Allowed: " .. player.DisplayName
+    TargetSubLabel.Text = "@" .. player.Name .. " (Controller)"
+    
+    local content, isLoaded = Players:GetUserThumbnailAsync(
+        player.UserId,
+        Enum.ThumbnailType.HeadShot,
+        Enum.ThumbnailSize.Size100x100
+    )
+    if isLoaded then
+        TargetAvatarImg.Image = content
+    end
+    sendNotification("ALLOWED PLAYER", "Controller set: " .. player.Name)
+end
+
+local function clearAllowedPlayer()
+    if allowedPlayer then
+        local prevName = allowedPlayer.Name
+        allowedPlayer = nil
+        
+        visualHitboxPart.Parent = nil
+        
+        -- Reset profile visuals
+        if currentTargetPlayer then
+            setTargetPlayer(currentTargetPlayer)
+        else
+            TargetNameLabel.Text = "Target: None"
+            TargetSubLabel.Text = "Type user below or use Tool"
+            TargetAvatarImg.Image = "rbxassetid://0"
+        end
+        
+        -- Clear active modes applied by allowed player aura
+        activeModes = {}
+        speedBoosts = {}
+        jpBoosts = {}
+        flyBoosts = {}
+
+        sendNotification("ALLOWED PLAYER", "Removed controller: " .. prevName)
+    else
+        sendNotification("ALLOWED PLAYER", "No allowed player currently active")
+    end
+end
+
+UserApplyBtn.MouseButton1Click:Connect(function()
+    local text = UserInputBox.Text
+    if text and text ~= "" then
+        local found = findTargetPlayer(text)
+        if found then
+            setTargetPlayer(found)
+        else
+            sendNotification("TARGET SELECT", "Player not found!")
+        end
+    end
+end)
+
+AllowApplyBtn.MouseButton1Click:Connect(function()
+    local text = AllowInputBox.Text
+    if text and text ~= "" then
+        local found = findTargetPlayer(text)
+        if found then
+            setAllowedPlayer(found)
+        else
+            sendNotification("ALLOWED PLAYER", "Player not found!")
+        end
+    end
+end)
+
+UnallowBtn.MouseButton1Click:Connect(function()
+    clearAllowedPlayer()
+end)
+
+local function createToggleBtn(name, callback)
+    local btn = Instance.new("TextButton")
+    btn.Name = name .. "Btn"
+    btn.Size = UDim2.new(1, -6, 0, 22)
+    btn.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+    btn.Text = name
+    btn.TextColor3 = Color3.fromRGB(190, 215, 195)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 9
+    btn.Parent = TrollScroll
+
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 4)
+    btnCorner.Parent = btn
+
+    local isToggled = false
+    btn.MouseButton1Click:Connect(function()
+        isToggled = not isToggled
+        if isToggled then
+            btn.BackgroundColor3 = Color3.fromRGB(40, 120, 65)
+            btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+            btn.TextColor3 = Color3.fromRGB(190, 215, 195)
+        end
+        callback(isToggled)
+    end)
+    return btn
+end
+
+-- CLEAR BUGS TOGGLE
+createToggleBtn("Clear Bugs", function(state)
+    clearBugsActive = state
+    if clearBugsActive then
+        activeModes = {}
+        speedBoosts = {}
+        jpBoosts = {}
+        flyBoosts = {}
+        currentActiveTrollMode = nil
+        currentActiveParam = nil
+        visualHitboxPart.Parent = nil
+    end
+    sendNotification("LOGIC TOGGLE", clearBugsActive and "Logic Paused & States Cleared" or "Logic Resumed")
+end)
+
+-- INTEGRATED CONTROL INPUT CREATOR
+local function createParamInputContainer(placeholder, buttonText, onApply)
+    local Container = Instance.new("Frame")
+    Container.Size = UDim2.new(1, -6, 0, 26)
+    Container.BackgroundColor3 = Color3.fromRGB(24, 32, 26)
+    Container.Parent = TrollScroll
+
+    local ContainerCorner = Instance.new("UICorner")
+    ContainerCorner.CornerRadius = UDim.new(0, 4)
+    ContainerCorner.Parent = Container
+
+    local TextBox = Instance.new("TextBox")
+    TextBox.Size = UDim2.new(0.6, -4, 1, -4)
+    TextBox.Position = UDim2.new(0, 2, 0, 2)
+    TextBox.BackgroundColor3 = Color3.fromRGB(14, 18, 16)
+    TextBox.Text = ""
+    TextBox.PlaceholderText = placeholder
+    TextBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TextBox.PlaceholderColor3 = Color3.fromRGB(120, 145, 125)
+    TextBox.Font = Enum.Font.GothamMedium
+    TextBox.TextSize = 8
+    TextBox.ClearTextOnFocus = false
+    TextBox.Parent = Container
+
+    local TextCorner = Instance.new("UICorner")
+    TextCorner.CornerRadius = UDim.new(0, 3)
+    TextCorner.Parent = TextBox
+
+    local ApplyBtn = Instance.new("TextButton")
+    ApplyBtn.Size = UDim2.new(0.4, -4, 1, -4)
+    ApplyBtn.Position = UDim2.new(0.6, 2, 0, 2)
+    ApplyBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 65)
+    ApplyBtn.Text = buttonText
+    ApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ApplyBtn.Font = Enum.Font.GothamBold
+    ApplyBtn.TextSize = 8
+    ApplyBtn.Parent = Container
+
+    local BtnCorner = Instance.new("UICorner")
+    BtnCorner.CornerRadius = UDim.new(0, 3)
+    BtnCorner.Parent = ApplyBtn
+
+    ApplyBtn.MouseButton1Click:Connect(function()
+        onApply(TextBox.Text)
+    end)
+end
+
+-- Hitbox Size Input Setting (Allowed Player Aura Radius)
+createParamInputContainer("Hitbox Size (1 to 200)", "Set Hitbox", function(text)
+    local num = tonumber(text)
+    if num then
+        num = math.clamp(num, 1, 200)
+        hitboxRadius = num
+        sendNotification("HITBOX SIZE", "Allowed Hitbox Set: " .. tostring(num) .. " studs")
+    end
+end)
+
+-- Speed Container
+createParamInputContainer("Speed (-50 to 50)", "Set Speed", function(text)
+    local num = tonumber(text)
+    if num then
+        num = math.clamp(num, -50, 50)
+        applyModeToTargets("speed", num)
+        sendNotification("TARGET SPEED", "Speed Applied: " .. tostring(num))
+    end
+end)
+
+-- Jump Power Container
+createParamInputContainer("JP Power (1 to 50)", "Set JP", function(text)
+    local num = tonumber(text)
+    if num then
+        num = math.clamp(num, 1, 50)
+        applyModeToTargets("jp", num)
+        sendNotification("TARGET JUMP", "Jump Power Applied: " .. tostring(num))
+    end
+end)
+
+-- Fly Power Container
+createParamInputContainer("Fly Power (1 to 50)", "Set Fly", function(text)
+    local num = tonumber(text)
+    if num then
+        num = math.clamp(num, 1, 50)
+        applyModeToTargets("fly", num)
+        sendNotification("TARGET FLY", "Fly Power Applied: " .. tostring(num))
+    end
+end)
+
+-- ALL TOGGLE
+createToggleBtn("Effect ALL Players (*all*)", function(state)
+    effectAllPlayers = state
+    sendNotification("TARGET MODE", effectAllPlayers and "Affecting ALL Players" or "Affecting Selected Target")
+end)
+
+createToggleBtn("Void Target", function(state)
+    applyModeToTargets(state and "voidtarget" or nil)
+end)
+
+createToggleBtn("Target Arms", function(state)
+    applyModeToTargets(state and "targetarms" or nil)
+end)
+
+createToggleBtn("Target Legs", function(state)
+    applyModeToTargets(state and "targetlegs" or nil)
+end)
+
+createToggleBtn("Target Torso", function(state)
+    applyModeToTargets(state and "targetorso" or nil)
+end)
+
+createToggleBtn("Target Head", function(state)
+    applyModeToTargets(state and "targethead" or nil)
+end)
+
+createToggleBtn("Target Tool", function(state)
+    applyModeToTargets(state and "targettool" or nil)
+end)
+
+createToggleBtn("Target NoAnims", function(state)
+    applyModeToTargets(state and "noanims" or nil)
+end)
+
+-- Status Display Frame
+local StatusFrame = Instance.new("Frame")
+StatusFrame.Name = "StatusFrame"
+StatusFrame.Size = UDim2.new(1, -20, 0, 75)
+StatusFrame.Position = UDim2.new(0, 10, 0, 330)
+StatusFrame.BackgroundColor3 = Color3.fromRGB(18, 24, 20)
+StatusFrame.BorderSizePixel = 0
+StatusFrame.Parent = MainFrame
+
+local StatusFrameCorner = Instance.new("UICorner")
+StatusFrameCorner.CornerRadius = UDim.new(0, 6)
+StatusFrameCorner.Parent = StatusFrame
+
+local StatusFrameStroke = Instance.new("UIStroke")
+StatusFrameStroke.Color = Color3.fromRGB(35, 48, 40)
+StatusFrameStroke.Thickness = 1
+StatusFrameStroke.Parent = StatusFrame
+
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Name = "StatusLabel"
+StatusLabel.Size = UDim2.new(1, -12, 1, 0)
+StatusLabel.Position = UDim2.new(0, 6, 0, 0)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "Status: Target Trolls Active"
+StatusLabel.TextColor3 = Color3.fromRGB(140, 175, 150)
+StatusLabel.TextSize = 9
+StatusLabel.TextScaled = true
+StatusLabel.Font = Enum.Font.GothamBold
+StatusLabel.TextXAlignment = Enum.TextXAlignment.Center
+StatusLabel.Parent = StatusFrame
+
+local StatusLabelConstraint = Instance.new("UITextSizeConstraint")
+StatusLabelConstraint.MaxTextSize = 9
+StatusLabelConstraint.MinTextSize = 6
+StatusLabelConstraint.Parent = StatusLabel
+
+-- Circular Floating Toggle Button
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Name = "ToggleAdmin"
+ToggleBtn.Size = UDim2.new(0, 38, 0, 38)
+ToggleBtn.Position = UDim2.new(0, 20, 1, -58)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(14, 18, 16)
+ToggleBtn.Text = ""
+ToggleBtn.AutoButtonColor = false
+ToggleBtn.Parent = ScreenGui
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(1, 0)
+ToggleCorner.Parent = ToggleBtn
+
+local ToggleWhiteStroke = Instance.new("UIStroke")
+ToggleWhiteStroke.Color = Color3.fromRGB(220, 245, 225)
+ToggleWhiteStroke.Thickness = 1.2
+ToggleWhiteStroke.Transparency = 0.1
+ToggleWhiteStroke.Parent = ToggleBtn
+
+-- Inner Green Glowing Core
+local ToggleCore = Instance.new("Frame")
+ToggleCore.Name = "Core"
+ToggleCore.Size = UDim2.new(0, 12, 0, 12)
+ToggleCore.Position = UDim2.new(0.5, -6, 0.5, -6)
+ToggleCore.BackgroundColor3 = Color3.fromRGB(60, 220, 120)
+ToggleCore.BorderSizePixel = 0
+ToggleCore.Parent = ToggleBtn
+
+local CoreCorner = Instance.new("UICorner")
+CoreCorner.CornerRadius = UDim.new(1, 0)
+CoreCorner.Parent = ToggleCore
+
+-- Notification Container
+local NotificationContainer = Instance.new("Frame")
+NotificationContainer.Name = "NotificationContainer"
+NotificationContainer.Size = UDim2.new(0, 180, 0, 200)
+NotificationContainer.Position = UDim2.new(1, -190, 1, -210)
+NotificationContainer.BackgroundTransparency = 1
+NotificationContainer.Parent = ScreenGui
+
+local UIListLayout = Instance.new("UIListLayout")
+UIListLayout.Parent = NotificationContainer
+UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+UIListLayout.Padding = UDim.new(0, 6)
+UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Bottom
+
+-- UI Glow Animation System
+local pulseTweenInfo = TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+local glowTarget = {BackgroundColor3 = Color3.fromRGB(70, 230, 120)}
+TweenService:Create(AccentLine, pulseTweenInfo, glowTarget):Play()
+TweenService:Create(ToggleCore, pulseTweenInfo, glowTarget):Play()
+
+-- Window Scale Animation Engine
+local MainScale = Instance.new("UIScale")
+MainScale.Parent = MainFrame
+
+local isVisible = true
+local function toggleVisibility()
+    isVisible = not isVisible
+    if isVisible then
+        MainFrame.Visible = true
+        MainScale.Scale = 0.7
+        TweenService:Create(MainScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+    else
+        local tween = TweenService:Create(MainScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale = 0})
+        tween:Play()
+        tween.Completed:Connect(function()
+            if MainScale.Scale == 0 then
+                MainFrame.Visible = false
+            end
+        end)
+    end
+end
+
+CloseBtn.MouseButton1Click:Connect(toggleVisibility)
+ToggleBtn.MouseButton1Click:Connect(toggleVisibility)
+
+-----------------------------------------------------------
+-- TARGET SELECTION & CLICKTARGET TOOL CREATOR
+-----------------------------------------------------------
+
+local function giveClickTargetTool()
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if not backpack then return end
+    
+    if backpack:FindFirstChild("ClickTarget") or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("ClickTarget")) then
+        return
+    end
+
+    local tool = Instance.new("Tool")
+    tool.Name = "ClickTarget"
+    tool.RequiresHandle = false
+    tool.CanBeDropped = false
+
+    tool.Activated:Connect(function()
+        local mouse = LocalPlayer:GetMouse()
+        if mouse and mouse.Target then
+            local model = mouse.Target:FindFirstAncestorOfClass("Model")
+            if model then
+                local plr = Players:GetPlayerFromCharacter(model)
+                if plr and plr ~= LocalPlayer then
+                    setTargetPlayer(plr)
+                end
+            end
+        end
+    end)
+
+    tool.Parent = backpack
+end
+
+giveClickTargetTool()
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    giveClickTargetTool()
+end)
+
+-----------------------------------------------------------
+-- CORE ENGINE & PLATE LOGIC
+-----------------------------------------------------------
+
+local function getMyPlate()
+    local plates = Workspace:FindFirstChild("Plates")
+    if not plates then return nil end
+    for _, f in ipairs(plates:GetChildren()) do
+        local o = f:FindFirstChild("Owner")
+        if o and (tostring(o.Value) == LocalPlayer.Name or tostring(o.Value) == tostring(LocalPlayer.UserId)) then
+            return f:FindFirstChild("Plate")
+        end
+    end
+end
+
+local function getPlateCFrame()
+    local plate = getMyPlate()
+    if plate and plate:IsA("BasePart") then
+        return plate.CFrame
+    end
+    return CFrame.new(0, 0, 0)
+end
+
+local function getActivePartsFolder()
+    local activeFolder = Workspace:FindFirstChild("ActiveParts") or Workspace:FindFirstChild("Assets")
+    if activeFolder then
+        return activeFolder
+    end
+    local plate = getMyPlate()
+    return plate and plate.Parent or Workspace
+end
+
+-- Efficient Interval Block Caching
+local function refreshActiveBlocks()
+    local folder = getActivePartsFolder()
+    if not folder then 
+        cachedBlocksMap = {}
+        return 
+    end
+
+    local newBlocks = {}
+    for _, item in ipairs(folder:GetChildren()) do
+        if item:IsA("BasePart") or item:IsA("Model") then
+            local isSpeedBlock = (item.Name == tostring(SPEED_ASSET)) or (item:GetAttribute("AssetId") == SPEED_ASSET)
+            if isSpeedBlock then
+                table.insert(newBlocks, item)
+            end
+        end
+    end
+
+    for userId, _ in pairs(activeModes) do
+        cachedBlocksMap[userId] = newBlocks
+    end
+end
+
+-- Filter helper to extract R6/R15 specific body parts
+local function getBodyPartsByFilter(character, filterType)
+    local parts = {}
+    if not character then return parts end
+
+    local legNames = {
+        ["Left Leg"] = true, ["Right Leg"] = true,
+        ["LeftFoot"] = true, ["RightFoot"] = true,
+        ["LeftLowerLeg"] = true, ["RightLowerLeg"] = true,
+        ["LeftUpperLeg"] = true, ["RightUpperLeg"] = true
+    }
+
+    local armNames = {
+        ["Left Arm"] = true, ["Right Arm"] = true,
+        ["LeftHand"] = true, ["RightHand"] = true,
+        ["LeftLowerArm"] = true, ["RightLowerArm"] = true,
+        ["LeftUpperArm"] = true, ["RightUpperArm"] = true
+    }
+
+    local torsoNames = {
+        ["Torso"] = true, ["UpperTorso"] = true, ["LowerTorso"] = true
+    }
+
+    local headNames = {
+        ["Head"] = true
+    }
+
+    local targetMap = filterType == "legs" and legNames 
+        or filterType == "arms" and armNames 
+        or filterType == "torso" and torsoNames 
+        or filterType == "head" and headNames
+
+    if targetMap then
+        for _, child in ipairs(character:GetChildren()) do
+            if child:IsA("BasePart") and targetMap[child.Name] then
+                table.insert(parts, child)
+            end
+        end
+    end
+
+    return parts
+end
+
+-- Helper to find tools in Character (equipped) or Backpack (unequipped)
+local function getToolParts(player)
+    local parts = {}
+    if not player then return parts end
+
+    local function extractPartsFromTool(tool)
+        for _, desc in ipairs(tool:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                table.insert(parts, desc)
+            end
+        end
+    end
+
+    if player.Character then
+        for _, child in ipairs(player.Character:GetChildren()) do
+            if child:IsA("Tool") then
+                extractPartsFromTool(child)
+            end
+        end
+    end
+
+    local backpack = player:FindFirstChildOfClass("Backpack")
+    if backpack then
+        for _, child in ipairs(backpack:GetChildren()) do
+            if child:IsA("Tool") then
+                extractPartsFromTool(child)
+            end
+        end
+    end
+
+    return parts
+end
+
+local function handleExtraBlocks(activeBlocks)
+    -- Intentionally left blank to avoid remote deletions
+end
+
+-----------------------------------------------------------
+-- RUNSERVICE HITBOX & BOOST MODES LOOP
+-----------------------------------------------------------
+
+local speedCooldownTimestamps = {}
+
+RunService.Heartbeat:Connect(function(deltaTime)
+    -- Circuit breaker: stop processing logic toward target when Clear Bugs is toggled on
+    if clearBugsActive then
+        visualHitboxPart.Parent = nil
+        return
+    end
+
+    local now = os.clock()
+
+    if now - lastBlockScan > 0.25 then
+        lastBlockScan = now
+        refreshActiveBlocks()
+    end
+
+    -- ALLOWED PLAYER HITBOX CONTROLLER SYSTEM & VISUAL SPHERE
+    if allowedPlayer and currentActiveTrollMode then
+        local allowedChar = allowedPlayer.Character
+        local allowedHRP = allowedChar and allowedChar:FindFirstChild("HumanoidRootPart")
+
+        if allowedHRP then
+            -- Render and update visual hitbox sphere
+            local diameter = hitboxRadius * 2
+            visualHitboxPart.Size = Vector3.new(diameter, diameter, diameter)
+            visualHitboxPart.CFrame = allowedHRP.CFrame
+            visualHitboxPart.Parent = Workspace
+
+            for _, otherPlr in ipairs(Players:GetPlayers()) do
+                -- Exclude ONLY the allowedPlayer themselves so aura affects everyone else (including LocalPlayer)
+                if otherPlr ~= allowedPlayer then
+                    local otherChar = otherPlr.Character
+                    local otherHRP = otherChar and otherChar:FindFirstChild("HumanoidRootPart")
+
+                    if otherHRP then
+                        local distance = (otherHRP.Position - allowedHRP.Position).Magnitude
+                        if distance <= hitboxRadius then
+                            activeModes[otherPlr.UserId] = currentActiveTrollMode
+                            if currentActiveTrollMode == "speed" then speedBoosts[otherPlr.UserId] = currentActiveParam
+                            elseif currentActiveTrollMode == "jp" then jpBoosts[otherPlr.UserId] = currentActiveParam
+                            elseif currentActiveTrollMode == "fly" then flyBoosts[otherPlr.UserId] = currentActiveParam end
+                        else
+                            activeModes[otherPlr.UserId] = nil
+                        end
+                    end
+                end
+            end
+        else
+            visualHitboxPart.Parent = nil
+        end
+    else
+        visualHitboxPart.Parent = nil
+    end
+
+    local plateCF = getPlateCFrame()
+
+    for userId, mode in pairs(activeModes) do
+        local player = Players:GetPlayerByUserId(userId)
+        if player then
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+            
+            if hrp and humanoid and stampRemote then
+                local activeBlocks = cachedBlocksMap[userId] or {}
+                local plateStampCF = plateCF * CFrame.new(0, liveStampHeight, 0)
+
+                if mode == "voidtarget" then
+                    local bodyParts = {}
+                    for _, part in ipairs(char:GetChildren()) do
+                        if part:IsA("BasePart") then
+                            table.insert(bodyParts, part)
+                        end
+                    end
+
+                    local plate = getMyPlate()
+                    local voidCF = plate and CFrame.new(plate.Position.X, -2.00000004e+21, plate.Position.Z) or CFrame.new(0, -2.00000004e+21, 0)
+
+                    if #activeBlocks > 0 then
+                        local primaryBlock = activeBlocks[1]
+                        if primaryBlock and primaryBlock.Parent then
+                            if primaryBlock:IsA("BasePart") then
+                                primaryBlock.CFrame = voidCF
+                            elseif primaryBlock:IsA("Model") then
+                                primaryBlock:PivotTo(voidCF)
+                            end
+                        end
+                        handleExtraBlocks(activeBlocks)
+                    elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.05 then
+                        speedCooldownTimestamps[userId] = now
+                        pcall(function()
+                            stampRemote:InvokeServer(
+                                ASSET,
+                                voidCF,
+                                GUID,
+                                bodyParts,
+                                0
+                            )
+                        end)
+                    end
+                elseif mode == "speed" then
+                    local multiplier = speedBoosts[userId] or 1
+                    local moveDir = humanoid.MoveDirection
+                    
+                    if moveDir.Magnitude > 0.05 then
+                        local currentY = hrp.AssemblyLinearVelocity.Y
+                        local targetVelocity = moveDir * (multiplier * liveStampSpeed)
+                        hrp.AssemblyLinearVelocity = Vector3.new(targetVelocity.X, currentY, targetVelocity.Z)
+                        
+                        if #activeBlocks > 0 then
+                            local primaryBlock = activeBlocks[1]
+                            if primaryBlock and primaryBlock.Parent then
+                                if primaryBlock:IsA("BasePart") then
+                                    primaryBlock.CFrame = plateStampCF
+                                elseif primaryBlock:IsA("Model") then
+                                    primaryBlock:PivotTo(plateStampCF)
+                                end
+                            end
+                            handleExtraBlocks(activeBlocks)
+                        elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                            speedCooldownTimestamps[userId] = now
+                            pcall(function()
+                                stampRemote:InvokeServer(
+                                    SPEED_ASSET,
+                                    plateStampCF,
+                                    SPEED_GUID,
+                                    { hrp },
+                                    1
+                                )
+                            end)
+                        end
+                    end
+                elseif mode == "jp" then
+                    local multiplier = jpBoosts[userId] or 1
+                    local state = humanoid:GetState()
+                    local isActivelyJumping = humanoid.Jump or state == Enum.HumanoidStateType.Jumping
+                    local isAirborne = isActivelyJumping or state == Enum.HumanoidStateType.Freefall
+                    
+                    if isActivelyJumping then
+                        local currentVel = hrp.AssemblyLinearVelocity
+                        local targetYVel = math.max(currentVel.Y, multiplier * 12)
+                        hrp.AssemblyLinearVelocity = Vector3.new(currentVel.X, targetYVel, currentVel.Z)
+                    end
+
+                    if isAirborne then
+                        if #activeBlocks > 0 then
+                            local primaryBlock = activeBlocks[1]
+                            if primaryBlock and primaryBlock.Parent then
+                                if primaryBlock:IsA("BasePart") then
+                                    primaryBlock.CFrame = plateStampCF
+                                elseif primaryBlock:IsA("Model") then
+                                    primaryBlock:PivotTo(plateStampCF)
+                                end
+                            end
+                            handleExtraBlocks(activeBlocks)
+                        elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                            speedCooldownTimestamps[userId] = now
+                            pcall(function()
+                                stampRemote:InvokeServer(
+                                    SPEED_ASSET,
+                                    plateStampCF,
+                                    SPEED_GUID,
+                                    { hrp },
+                                    1
+                                )
+                            end)
+                        end
+                    end
+                elseif mode == "fly" then
+                    local multiplier = flyBoosts[userId] or 1
+                    local camera = Workspace.CurrentCamera
+                    local moveDir = humanoid.MoveDirection
+                    
+                    local flyVector = Vector3.zero
+                    if moveDir.Magnitude > 0.05 and camera then
+                        local camCF = camera.CFrame
+                        local lookDir = camCF.LookVector
+                        local rightDir = camCF.RightVector
+                        
+                        local localForward = (moveDir:Dot(camCF.LookVector.Unit))
+                        local localRight = (moveDir:Dot(camCF.RightVector.Unit))
+                        
+                        flyVector = (lookDir * localForward) + (rightDir * localRight)
+                        if flyVector.Magnitude > 0.01 then
+                            flyVector = flyVector.Unit
+                        end
+                    end
+
+                    local targetVelocity = flyVector * (multiplier * liveStampSpeed)
+                    hrp.AssemblyLinearVelocity = targetVelocity
+
+                    if #activeBlocks > 0 then
+                        local primaryBlock = activeBlocks[1]
+                        if primaryBlock and primaryBlock.Parent then
+                            if primaryBlock:IsA("BasePart") then
+                                primaryBlock.CFrame = plateStampCF
+                            elseif primaryBlock:IsA("Model") then
+                                primaryBlock:PivotTo(plateStampCF)
+                            end
+                        end
+                        handleExtraBlocks(activeBlocks)
+                    elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                        speedCooldownTimestamps[userId] = now
+                        pcall(function()
+                            stampRemote:InvokeServer(
+                                SPEED_ASSET,
+                                plateStampCF,
+                                SPEED_GUID,
+                                { hrp },
+                                1
+                            )
+                        end)
+                    end
+                elseif mode == "noanims" then
+                    local animator = humanoid:FindFirstChildOfClass("Animator")
+                    if animator then
+                        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                            track:Stop(0)
+                        end
+                    end
+                    for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+                        track:Stop(0)
+                    end
+
+                    local bodyParts = {}
+                    for _, part in ipairs(char:GetChildren()) do
+                        if part:IsA("BasePart") then
+                            table.insert(bodyParts, part)
+                            part.AssemblyLinearVelocity = Vector3.zero
+                            part.AssemblyAngularVelocity = Vector3.zero
+                        end
+                    end
+
+                    if #activeBlocks > 0 then
+                        local primaryBlock = activeBlocks[1]
+                        if primaryBlock and primaryBlock.Parent then
+                            if primaryBlock:IsA("BasePart") then
+                                primaryBlock.CFrame = plateStampCF
+                            elseif primaryBlock:IsA("Model") then
+                                primaryBlock:PivotTo(plateStampCF)
+                            end
+                        end
+                        handleExtraBlocks(activeBlocks)
+                    elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                        speedCooldownTimestamps[userId] = now
+                        pcall(function()
+                            stampRemote:InvokeServer(
+                                SPEED_ASSET,
+                                plateStampCF,
+                                SPEED_GUID,
+                                bodyParts,
+                                1
+                            )
+                        end)
+                    end
+                elseif mode == "targetlegs" or mode == "targetarms" or mode == "targetorso" or mode == "targethead" then
+                    local filter = string.sub(mode, 7)
+                    local targetParts = getBodyPartsByFilter(char, filter)
+
+                    if #targetParts > 0 then
+                        if #activeBlocks > 0 then
+                            local primaryBlock = activeBlocks[1]
+                            if primaryBlock and primaryBlock.Parent then
+                                if primaryBlock:IsA("BasePart") then
+                                    primaryBlock.CFrame = plateStampCF
+                                elseif primaryBlock:IsA("Model") then
+                                    primaryBlock:PivotTo(plateStampCF)
+                                end
+                            end
+                            handleExtraBlocks(activeBlocks)
+                        elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                            speedCooldownTimestamps[userId] = now
+                            pcall(function()
+                                stampRemote:InvokeServer(
+                                    SPEED_ASSET,
+                                    plateStampCF,
+                                    SPEED_GUID,
+                                    targetParts,
+                                    1
+                                )
+                            end)
+                        end
+                    end
+                elseif mode == "targettool" then
+                    local targetParts = getToolParts(player)
+
+                    if #targetParts > 0 then
+                        if #activeBlocks > 0 then
+                            local primaryBlock = activeBlocks[1]
+                            if primaryBlock and primaryBlock.Parent then
+                                if primaryBlock:IsA("BasePart") then
+                                    primaryBlock.CFrame = plateStampCF
+                                elseif primaryBlock:IsA("Model") then
+                                    primaryBlock:PivotTo(plateStampCF)
+                                end
+                            end
+                            handleExtraBlocks(activeBlocks)
+                        elseif (now - (speedCooldownTimestamps[userId] or 0)) >= 0.15 then
+                            speedCooldownTimestamps[userId] = now
+                            pcall(function()
+                                stampRemote:InvokeServer(
+                                    SPEED_ASSET,
+                                    plateStampCF,
+                                    SPEED_GUID,
+                                    targetParts,
+                                    1
+                                )
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+sendNotification("BEAT IT", "Target Trolls & Allowed Player Module Loaded")
